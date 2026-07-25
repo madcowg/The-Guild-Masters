@@ -666,6 +666,73 @@ export const SEED_QUESTS = [
   },
 ];
 
+// Other guild members' new postings, awaiting Steward's Ledger review —
+// separate from the player's own so approval rules (rank ceiling, no
+// self-review) have real third-party items to act on. Spans both the
+// steward-approvable band (F/E/D/C) and the admin-only band (B/A/S).
+export const SEED_STEWARD_QUEUE = [
+  {
+    id: "sq1",
+    rank: "E",
+    title: "Gutters Before the Storm",
+    desc: "Autumn leaves are winning. Ladder provided, nerve is not.",
+    type: "Labor",
+    stats: { STR: 1 },
+    scrip: 45,
+    employer: "Old Man Fenwick",
+    barter: false,
+    status: "pendingReview",
+  },
+  {
+    id: "sq2",
+    rank: "D",
+    title: "Translate Grandmother's Letters",
+    desc: "A box of letters in a language none of us kept up. Handle with care.",
+    type: "Scholarly",
+    stats: { INT: 1, WIS: 1 },
+    scrip: 70,
+    employer: "The Ostrowski Family",
+    barter: false,
+    status: "pendingReview",
+  },
+  {
+    id: "sq3",
+    rank: "C",
+    title: "Rewire the Workshop",
+    desc: "Half the outlets spark. The other half don't work at all. Bring gloves.",
+    type: "Craft",
+    stats: { DEX: 1, INT: 1 },
+    scrip: 120,
+    employer: "Guildwright Oskar",
+    barter: false,
+    status: "pendingReview",
+  },
+  {
+    id: "sq4",
+    rank: "B",
+    title: "Escort the Relic Shipment",
+    desc: "Three days on the north road with a crate no one will say much about.",
+    type: "Adventure",
+    stats: { STR: 1, CON: 1, WIS: 1 },
+    scrip: 400,
+    employer: "Curator Voss",
+    barter: false,
+    status: "pendingReview",
+  },
+  {
+    id: "sq5",
+    rank: "S",
+    title: "Negotiate the Border Truce",
+    desc: "Two chapters, one river, and a great deal of pride on both banks.",
+    type: "Social",
+    stats: { CHA: 1, WIS: 1, INT: 1, CON: 1 },
+    scrip: 2000,
+    employer: "The Guild Council itself",
+    barter: false,
+    status: "pendingReview",
+  },
+];
+
 export const SEED_ROSTER = [
   {
     id: "a1",
@@ -899,6 +966,8 @@ export const INITIAL_PLAYER = {
   partyAssisted: {},
   notifications: [],
   disputes: [],
+  stewardQueue: SEED_STEWARD_QUEUE,
+  stewardLog: [],
   profile: {
     email: "",
     phone: "",

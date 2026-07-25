@@ -183,12 +183,29 @@ North-star metric: **quests completed per active member per month.**
    minified output. See "Current state" above.
 2. **Steward/admin moderation view** — new postings land with
    `status: "pendingReview"` and are filtered off the public board
-   (`App.jsx`, search `pendingReview`) until a steward approves them from the
-   Steward's Ledger (Guildhall tab). Steward tools toggle lives in profile
-   settings (`player.profile.isSteward`, prototype-only, no real auth).
-   Dispute resolution (both employer-side and taker-side) lives in the same
-   Ledger. Verified end-to-end in-browser: post → pending → approve → live +
-   notification.
+   (`App.jsx`, search `pendingReview`) until cleared from the Steward's
+   Ledger (Guildhall tab). Governance rules (added after the initial build,
+   see `canStewardApprove` in `App.jsx`):
+   - Steward Tools toggle (`player.profile.isSteward`) only takes effect at
+     Rank B+ (`canBeSteward`); below that the checkbox is disabled.
+   - **No self-review**: a player can never approve/resolve their own
+     postings or disputes — those (plus their own taker-side disputes)
+     always route to "the Guild Council" (NPC/admin), swept on every
+     "Fresh postings" click (`refreshBoard`).
+   - **Rank ceiling**: a steward may only approve a request *strictly below*
+     their own rank. Rank B/A/S requests always require the Guild Council,
+     never a ranked guild member, regardless of the steward's own rank.
+   - Third-party postings to review come from `SEED_STEWARD_QUEUE`
+     (`constants.js`) / `player.stewardQueue` — needed because in this
+     single-player prototype the player's own postings/disputes are always
+     self-authored, so a simulated queue is what gives rank-gated approval
+     something real to act on.
+   - Every approve/reject/resolve action logs to `player.stewardLog`
+     (actor + timestamp), shown as "Recent steward actions" in the Ledger.
+   - Prototype-only: no real auth, still a client-side flag. Verified
+     end-to-end in-browser at Rank C (ledger correctly hidden), Rank B
+     (E/D/C approvable, B/S correctly Council-only), and via "Fresh
+     postings" sweeping the remaining backlog.
 3. **Persistent notifications** — `pushNotification()` appends to
    `player.notifications` (persisted, not just an ephemeral toast), with an
    unread-count badge on the bell icon and a dropdown list. Still no real
@@ -204,13 +221,10 @@ North-star metric: **quests completed per active member per month.**
 Everything above was previously the roadmap and is now done — the list below
 is fresh candidates, not yet scoped or prioritized with the user:
 
-1. Quest-card click/tap currently doesn't obviously open a detail view from
-   the board — worth checking the intended interaction (petition flow may
-   require a different affordance than a plain click) and making it more
-   discoverable.
-2. Steward tools are self-service (any player can flip the toggle in their
-   own settings) — fine for a prototype, but flag before this goes further
-   that real moderator permissions need actual auth, not a client-side flag.
+1. Quest-card click/tap already opens a full detail modal (title, desc,
+   employer, reward, grants, Save/Petition) — confirmed working, not a bug.
+2. Steward Tools is still a self-service client-side flag (no real auth) —
+   fine for a prototype, but flag before this goes further.
 3. No automated tests exist for any of the flows above (moderation, party
    split, notifications) — worth at least a smoke-test script if this keeps
    growing.

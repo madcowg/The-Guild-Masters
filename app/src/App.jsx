@@ -48,8 +48,12 @@ import { QuestCard } from "./components/QuestCard.jsx";
       [settingsOpen, setSettingsOpen] = useState(false),
       [notifOpen, setNotifOpen] = useState(false),
       allQuests = useMemo(
-        () => [...SEED_QUESTS, ...(player.myPostings || [])],
-        [player.myPostings],
+        () => [
+          ...SEED_QUESTS,
+          ...(player.myPostings || []),
+          ...(player.stewardQueue || []),
+        ],
+        [player.myPostings, player.stewardQueue],
       );
     (useEffect(() => {
       (async () => {
@@ -107,6 +111,15 @@ import { QuestCard } from "./components/QuestCard.jsx";
       nextRank = RANKS[rankIndex + 1],
       canAttemptTrial = nextRank && player.xp >= RANK_XP_THRESHOLD[nextRank],
       effectiveRankIndex = rankIndex + (player.party ? 1 : 0),
+      canBeSteward = rankIndex >= 4,
+      isActingSteward = canBeSteward && !!player.profile.isSteward,
+      // Rank B/A/S requests always need the Guild Council (admin), never a
+      // ranked guild member; below that, a steward may only approve requests
+      // strictly below their own rank (never their own, never a peer's).
+      canStewardApprove = (s) =>
+        isActingSteward &&
+        RANKS.indexOf(s.rank) < 4 &&
+        rankIndex > RANKS.indexOf(s.rank),
       addAchievements = (s) => {
         let freshlyEarned = s.filter((id) => !player.achievements.includes(id));
         setPlayer((S) => ({
@@ -158,16 +171,121 @@ import { QuestCard } from "./components/QuestCard.jsx";
           showToast("Petition sent \u2014 awaiting the employer's seal."));
       },
       refreshBoard = () => {
-        let s = (player.doneSinceRefresh || []).length;
-        if (!s)
+        let recycled = (player.doneSinceRefresh || []).length,
+          pending = player.myPostings.filter((s) => s.status === "pendingReview"),
+          disputedPostings = player.myPostings.filter((s) => s.disputed),
+          takerDisputes = player.disputes || [],
+          // Anything a ranked steward couldn't touch (rank too low, B/A/S
+          // tier, or simply never toggled on) still needs to move —
+          // the Guild Council sweeps whatever's left on every refresh.
+          queuedLeftover = (player.stewardQueue || []).filter(
+            (s) => s.status === "pendingReview",
+          );
+        if (
+          !recycled &&
+          !pending.length &&
+          !disputedPostings.length &&
+          !takerDisputes.length &&
+          !queuedLeftover.length
+        )
           return showToast("The boards are already full of fresh postings.");
+        let ts = Date.now(),
+          logEntries = [
+            ...pending.map((s) => ({
+              id: "sl" + s.id + "-approve",
+              action: "approved",
+              title: s.title,
+              actor: "the Guild Council",
+              ts,
+            })),
+            ...disputedPostings.map((s) => ({
+              id: "sl" + s.id + "-resolve",
+              action: "resolved the dispute on",
+              title: s.title,
+              actor: "the Guild Council",
+              ts,
+            })),
+            ...takerDisputes.map((d) => ({
+              id: "sl" + d.id + "-resolve",
+              action: "resolved the dispute on",
+              title: d.title,
+              actor: "the Guild Council",
+              ts,
+            })),
+            ...queuedLeftover.map((s) => ({
+              id: "sl" + s.id + "-approve",
+              action: "approved",
+              title: s.title,
+              actor: "the Guild Council",
+              ts,
+            })),
+          ];
+        // Postings/disputes the player themselves filed or took part in are
+        // never self-approved by the player's own Steward Tools (conflict of
+        // interest) — the Guild Council clears that backlog whenever fresh
+        // postings are pulled instead.
         (setPlayer((S) => ({
           ...S,
           doneSinceRefresh: [],
+          myPostings: S.myPostings.map((s) =>
+            s.status === "pendingReview"
+              ? { ...s, status: "open" }
+              : s.disputed
+                ? { ...s, disputed: false }
+                : s,
+          ),
+          disputes: [],
+          stewardQueue: (S.stewardQueue || []).map((s) =>
+            s.status === "pendingReview" ? { ...s, status: "open" } : s,
+          ),
+          stewardLog: [...logEntries, ...(S.stewardLog || [])].slice(0, 20),
         })),
-          showToast(
-            `The steward pins ${s} fresh posting${s > 1 ? "s" : ""} to the boards.`,
+          recycled
+            ? showToast(
+                `The Guild Council pins ${recycled} fresh posting${recycled > 1 ? "s" : ""} to the boards.`,
+              )
+            : showToast("The Guild Council clears the steward's backlog."),
+          pending.forEach((s) =>
+            pushNotification(
+              `The Guild Council approved your posting "${s.title}" — it's now live.`,
+            ),
           ));
+      },
+      approveQueuedPosting = (s) => {
+        (setPlayer((N) => ({
+          ...N,
+          stewardQueue: N.stewardQueue.map((U) =>
+            U.id === s.id ? { ...U, status: "open" } : U,
+          ),
+          stewardLog: [
+            {
+              id: "sl" + s.id + "-approve",
+              action: "approved",
+              title: s.title,
+              actor: N.name,
+              ts: Date.now(),
+            },
+            ...(N.stewardLog || []),
+          ].slice(0, 20),
+        })),
+          showToast(`"${s.title}" approved and pinned to the board.`));
+      },
+      rejectQueuedPosting = (s) => {
+        (setPlayer((N) => ({
+          ...N,
+          stewardQueue: N.stewardQueue.filter((U) => U.id !== s.id),
+          stewardLog: [
+            {
+              id: "sl" + s.id + "-reject",
+              action: "rejected",
+              title: s.title,
+              actor: N.name,
+              ts: Date.now(),
+            },
+            ...(N.stewardLog || []),
+          ].slice(0, 20),
+        })),
+          showToast(`"${s.title}" was rejected.`));
       },
       submitPosting = () => {
         let s = statRewardForRank(draftPosting.rank),
@@ -212,36 +330,6 @@ import { QuestCard } from "./components/QuestCard.jsx";
           ...N,
           myPostings: N.myPostings.map((U) => (U.id === s ? S(U) : U)),
         })),
-      approvePosting = (s) => {
-        (updateMyPosting(s.id, (N) => ({
-          ...N,
-          status: "open",
-        })),
-          showToast(`"${s.title}" approved and pinned to the board.`),
-          pushNotification(`The Guild Council approved your posting "${s.title}" — it's now live.`));
-      },
-      rejectPosting = (s) => {
-        (setPlayer((N) => ({
-          ...N,
-          myPostings: N.myPostings.filter((U) => U.id !== s.id),
-        })),
-          showToast(`"${s.title}" was rejected by the Guild Council.`),
-          pushNotification(`Your posting "${s.title}" was rejected by the Guild Council.`));
-      },
-      resolvePostingDispute = (s) => {
-        (updateMyPosting(s.id, (N) => ({
-          ...N,
-          disputed: false,
-        })),
-          showToast("Dispute marked resolved by the Guild Council."));
-      },
-      resolveTakerDispute = (s) => {
-        (setPlayer((N) => ({
-          ...N,
-          disputes: N.disputes.filter((U) => U.id !== s.id),
-        })),
-          showToast("Dispute marked resolved by the Guild Council."));
-      },
       crierBringsPetitions = (s) => {
         let S = SEED_PETITIONERS.filter(
           (pt) =>
@@ -1293,13 +1381,16 @@ import { QuestCard } from "./components/QuestCard.jsx";
                           </span>
                         </label>
                         <label
-                          className="check-row"
+                          className={
+                            "check-row" + (canBeSteward ? "" : " disabled")
+                          }
                           style={{
                             margin: "8px 0 0",
                           }}
                         >
                           <input
                             type="checkbox"
+                            disabled={!canBeSteward}
                             checked={!!player.profile.isSteward}
                             onChange={(s) =>
                               setPlayer((S) => ({
@@ -1312,8 +1403,12 @@ import { QuestCard } from "./components/QuestCard.jsx";
                             }
                           />
                           <span>
-                            Steward tools (prototype-only: approve postings &
-                            resolve disputes in the Guildhall)
+                            Steward tools (prototype-only: approve other
+                            members' postings below your own rank in the
+                            Guildhall — Rank {RANKS[4]}/{RANKS[5]}/{RANKS[6]}{" "}
+                            requests always need the Guild Council)
+                            {!canBeSteward &&
+                              ` — requires Rank ${RANKS[4]} or higher`}
                           </span>
                         </label>
                       </div>
@@ -1559,16 +1654,19 @@ import { QuestCard } from "./components/QuestCard.jsx";
               {tab === "hall" && (
                 <section>
                   <h2 className="h2">The Guildhall</h2>
-                  {player.profile.isSteward && (
+                  {isActingSteward && (
                     <div className="bucket steward-ledger">
                       <h3 className="h3">Steward's Ledger</h3>
                       <p className="qr-sub">
-                        Visible only to stewards. Review new postings before
-                        they reach the public board, and resolve disputed
-                        deeds.
+                        Visible only to stewards (Rank {RANKS[4]}+). A steward
+                        may never review their own postings or disputes, and
+                        may only approve requests strictly below their own
+                        rank. Rank {RANKS[4]}/{RANKS[5]}/{RANKS[6]} requests
+                        always need the Guild Council instead of a ranked
+                        guild member.
                       </p>
                       <h4 className="h4">
-                        Pending postings —{" "}
+                        Your postings awaiting Council review —{" "}
                         {player.myPostings.filter((s) => s.status === "pendingReview").length}
                       </h4>
                       {player.myPostings.filter((s) => s.status === "pendingReview").length === 0 && (
@@ -1591,30 +1689,15 @@ import { QuestCard } from "./components/QuestCard.jsx";
                                 {s.barter ? `Barter: ${s.barterFor}` : `${s.scrip} scrip`}
                               </div>
                             </div>
-                            <div className="pet-actions">
-                              <button
-                                className="btn tiny gold"
-                                onClick={() => approvePosting(s)}
-                              >
-                                Approve
-                              </button>
-                              <button
-                                className="btn tiny ghost"
-                                onClick={() => rejectPosting(s)}
-                              >
-                                Reject
-                              </button>
-                            </div>
+                            <div className="qr-sub">Awaiting the Council</div>
                           </div>
                         ))}
                       <h4 className="h4">
-                        Disputed deeds —{" "}
-                        {player.myPostings.filter((s) => s.disputed).length +
-                          (player.disputes || []).length}
+                        Your own disputed postings —{" "}
+                        {player.myPostings.filter((s) => s.disputed).length}
                       </h4>
-                      {player.myPostings.filter((s) => s.disputed).length +
-                        (player.disputes || []).length === 0 && (
-                        <p className="empty">No open disputes.</p>
+                      {player.myPostings.filter((s) => s.disputed).length === 0 && (
+                        <p className="empty">No open disputes on your postings.</p>
                       )}
                       {player.myPostings
                         .filter((s) => s.disputed)
@@ -1627,14 +1710,16 @@ import { QuestCard } from "./components/QuestCard.jsx";
                                 {"★".repeat(s.myRating)} as employer
                               </div>
                             </div>
-                            <button
-                              className="btn tiny"
-                              onClick={() => resolvePostingDispute(s)}
-                            >
-                              Mark resolved
-                            </button>
+                            <div className="qr-sub">Awaiting the Council</div>
                           </div>
                         ))}
+                      <h4 className="h4">
+                        Your disputes as a taker —{" "}
+                        {(player.disputes || []).length}
+                      </h4>
+                      {(player.disputes || []).length === 0 && (
+                        <p className="empty">No open disputes.</p>
+                      )}
                       {(player.disputes || []).map((d) => (
                         <div key={d.id} className="quest-row">
                           <div className="qr-main">
@@ -1644,12 +1729,65 @@ import { QuestCard } from "./components/QuestCard.jsx";
                               their taker
                             </div>
                           </div>
-                          <button
-                            className="btn tiny"
-                            onClick={() => resolveTakerDispute(d)}
-                          >
-                            Mark resolved
-                          </button>
+                          <div className="qr-sub">Awaiting the Council</div>
+                        </div>
+                      ))}
+                      <h4 className="h4">
+                        Other guild members' postings —{" "}
+                        {(player.stewardQueue || []).filter((s) => s.status === "pendingReview").length}
+                      </h4>
+                      {(player.stewardQueue || []).filter((s) => s.status === "pendingReview").length === 0 && (
+                        <p className="empty">Nothing awaiting review.</p>
+                      )}
+                      {(player.stewardQueue || [])
+                        .filter((s) => s.status === "pendingReview")
+                        .map((s) => (
+                          <div key={s.id} className="quest-row">
+                            <span
+                              className="qr-rank"
+                              style={{ background: RANK_COLORS[s.rank] }}
+                            >
+                              {s.rank}
+                            </span>
+                            <div className="qr-main">
+                              <div className="qr-title">{s.title}</div>
+                              <div className="qr-sub">
+                                {s.employer} ·{" "}
+                                {s.barter ? `Barter: ${s.barterFor}` : `${s.scrip} scrip`}
+                              </div>
+                            </div>
+                            {canStewardApprove(s) ? (
+                              <div className="pet-actions">
+                                <button
+                                  className="btn tiny gold"
+                                  onClick={() => approveQueuedPosting(s)}
+                                >
+                                  Approve
+                                </button>
+                                <button
+                                  className="btn tiny ghost"
+                                  onClick={() => rejectQueuedPosting(s)}
+                                >
+                                  Reject
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="qr-sub">
+                                {RANKS.indexOf(s.rank) >= 4
+                                  ? "Requires Guild Council approval"
+                                  : "Requires a higher-ranked steward"}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      <h4 className="h4">Recent steward actions</h4>
+                      {(player.stewardLog || []).length === 0 && (
+                        <p className="empty">No actions logged yet.</p>
+                      )}
+                      {(player.stewardLog || []).slice(0, 8).map((l) => (
+                        <div key={l.id} className="qr-sub steward-log-row">
+                          {l.actor} {l.action} "{l.title}" —{" "}
+                          {new Date(l.ts).toLocaleDateString()}
                         </div>
                       ))}
                     </div>
