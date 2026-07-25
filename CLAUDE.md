@@ -262,14 +262,15 @@ use this, ranked by dependency order — earlier tiers block later ones.
    coordinates + geofence radius for check-in, an active rotation window,
    and per-venue perks/promo terms — this is also the mechanism for
    promotional partnerships (sponsors get check-in/redemption analytics).
-   Managed via the Admin Console (item 2). **Open design question, not yet
-   decided:** is "The Tavern" *one active venue at a time* (rotates on a
-   schedule, the app just shows wherever it currently is), or *multiple
-   simultaneous partner venues* the player picks from a list/map? This
-   changes the data model (single current-venue value vs. a real
-   venue-selection UI) and must be settled before scoping the work.
-   Also changes the "Tavern beta" phase metric from one door's conversion
-   rate to per-venue + aggregate conversion.
+   **Rotation model (decided 2026-07-25):** exactly **one active venue per
+   guild chapter** at a time — not a player-facing list/map. A chapter's
+   venue can only be changed by the Guild Council (i.e. only via the Admin
+   Console, item 2 — no player- or steward-level control over this,
+   regardless of rank). Launch starts with one chapter, so one venue overall;
+   the data model still needs to be chapter-scoped (`chapter -> activeVenue`)
+   since multi-city chapters (Tier 5) will each rotate independently. This
+   also changes the "Tavern beta" phase metric from one door's conversion
+   rate to per-chapter (currently = one door) conversion.
 9. **Push notifications** (web push / FCM / APNs) replacing the in-app-only
    inbox — flagged as the strongest re-engagement hook.
 10. **Real ratings/reviews** replacing simulated NPC petitioners, once real
