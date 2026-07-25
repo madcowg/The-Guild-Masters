@@ -16,9 +16,12 @@ frontend falls back to its original fully-local behavior untouched.
 2. In the project's **Settings -> API** page, copy:
    - **Project URL** -> becomes `VITE_SUPABASE_URL` (frontend) and
      `SUPABASE_URL` (edge functions)
-   - **anon public key** -> `VITE_SUPABASE_ANON_KEY` / `SUPABASE_ANON_KEY`
-   - **service_role key** -> `SUPABASE_SERVICE_ROLE_KEY` (edge functions
-     only — never put this in the frontend `.env`, it bypasses RLS)
+   - **publishable key** (Supabase's current name; older docs/projects call
+     it the **anon key** — same thing, safe to expose client-side) ->
+     `VITE_SUPABASE_ANON_KEY` / `SUPABASE_ANON_KEY`
+   - **secret key** (current name; older docs call it the **service_role
+     key**) -> `SUPABASE_SERVICE_ROLE_KEY` (edge functions only — never put
+     this in the frontend `.env`, it bypasses RLS)
 
 ## 2. Run the schema
 

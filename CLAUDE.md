@@ -244,13 +244,22 @@ use this, ranked by dependency order — earlier tiers block later ones.
    Still stubbed/"coming soon": user account search & suspension, global
    cross-chapter moderation view, payments oversight dashboard — analytics
    dashboard for the north-star/phase-gate metrics not started.
-3. **Real authentication — BUILT** (Google OAuth via Supabase Auth,
-   `app/src/auth/SupabaseAuthContext.jsx`). Gates the app in front of the
-   existing mock landing flow; if `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY`
-   are unset, it steps aside entirely and the original email/phone/OTP mock
-   flow still runs untouched (so the currently-deployed static site isn't
-   broken until Supabase is actually configured). Email/phone login as an
-   alternative to Google was not built — Google-only for now.
+   **Verified live end-to-end 2026-07-25**: real Google sign-up → profile
+   row created → promoted to admin (first-admin bootstrap via SQL, per
+   `server/README.md`) → Admin Console → added a partner venue → set it
+   active → confirmed in `steward_log` with the real admin's name attached.
+3. **Real authentication — BUILT AND VERIFIED LIVE** (Google OAuth via
+   Supabase Auth, `app/src/auth/SupabaseAuthContext.jsx`). Gates the app in
+   front of the existing mock landing flow; if `VITE_SUPABASE_URL`/
+   `VITE_SUPABASE_ANON_KEY` are unset, it steps aside entirely and the
+   original email/phone/OTP mock flow still runs untouched. Email/phone
+   login as an alternative to Google was not built — Google-only for now.
+   **Bug caught during live testing, fixed in migration 0005**: profiles
+   never had a `chapter_id` assignment path at all (not set anywhere in the
+   onboarding insert), which silently broke the Admin Console's venue
+   lookups for any real signed-up user. Fixed with a `before insert` trigger
+   that auto-assigns the earliest-created chapter — fine while there's only
+   one chapter, needs revisiting once multi-chapter signup exists (Tier 5).
 4. **Real ID verification — PARTIALLY BUILT, manual review only.** Player
    uploads a document (private Supabase Storage bucket) during onboarding;
    admin approves/rejects from the Admin Console. No third-party
