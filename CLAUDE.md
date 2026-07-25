@@ -7,17 +7,24 @@ demoing the concept and gathering feedback before any real backend exists.
 
 ## Current state
 
-`index.html` is a **fully self-contained, bundled** file: React + ReactDOM +
-the entire app, minified into one `<script>` tag, deployed via GitHub Pages at
-`https://madcowg.github.io/The-Guild-Masters/`. There is no build step for the
-deployed artifact today — it's a finished bundle, not source.
+The editable source lives in `app/` — a Vite + React project (`app/src/App.jsx`,
+`constants.js`, `components/QuestCard.jsx`, etc.). `npm run build` in `app/`
+produces `app/dist/index.html` as a **fully self-contained, single-file**
+bundle (via `vite-plugin-singlefile`); that output gets copied over the
+repo-root `index.html`, which is what GitHub Pages actually deploys at
+`https://madcowg.github.io/The-Guild-Masters/`. `app/node_modules/` and
+`app/dist/` are gitignored — only source is tracked. There is still no CI/build
+step on the deploy side: rebuild locally and commit the updated root
+`index.html` alongside any `app/src` changes.
 
-The actual editable source (JSX, pre-bundle) is NOT currently in this repo in
-clean form — it was developed conversationally and bundled directly to HTML.
-**First task for Claude Code: reconstruct/extract a clean `src/` (e.g.
-`App.jsx` + a proper `package.json`/Vite or esbuild setup) from `index.html`
-so the project is maintainable going forward, rather than continuing to hand-edit
-minified output.**
+**Gotcha specific to this codebase:** a plain-quoted JSX attribute like
+`placeholder="•••"` is NOT interpreted as a JS escape — JSX
+treats quoted attribute values as literal text (like HTML), so it renders the
+literal backslash-u text instead of the intended character. Any `\uXXXX`
+(or similar) escape in an attribute must be wrapped in a JS expression:
+`placeholder={"•••"}`. This bit the OTP-dots and several
+ellipsis/em-dash placeholders once already — watch for it when adding new
+placeholder/label text with non-ASCII characters.
 
 ## Critical bug already hit once — avoid repeating it
 
@@ -170,16 +177,40 @@ North-star metric: **quests completed per active member per month.**
    proven. Themes already planned/named in the UI: Neo-Kyoto (cyberpunk),
    The Athenaeum (Victorian), The Speakeasy (roaring '20s).
 
+## Done since the original handoff
+
+1. **Source extraction** — clean `app/src/` Vite project, no more hand-edited
+   minified output. See "Current state" above.
+2. **Steward/admin moderation view** — new postings land with
+   `status: "pendingReview"` and are filtered off the public board
+   (`App.jsx`, search `pendingReview`) until a steward approves them from the
+   Steward's Ledger (Guildhall tab). Steward tools toggle lives in profile
+   settings (`player.profile.isSteward`, prototype-only, no real auth).
+   Dispute resolution (both employer-side and taker-side) lives in the same
+   Ledger. Verified end-to-end in-browser: post → pending → approve → live +
+   notification.
+3. **Persistent notifications** — `pushNotification()` appends to
+   `player.notifications` (persisted, not just an ephemeral toast), with an
+   unread-count badge on the bell icon and a dropdown list. Still no real
+   push/OS-level notification — this is an in-app inbox only.
+4. **Party reward splitting** — `completeQuestAndRate` in `App.jsx` divides
+   XP/scrip/stat points across `partySize` (via `Math.ceil(x / partySize)`)
+   when `partyAssisted` is set for that quest. Comment in source explains why
+   it's a divided pool rather than per-member payout (no persisted account
+   for NPC roster members).
+
 ## Suggested next steps for Claude Code
 
-1. Extract clean source from `index.html` into a real `src/` + build config
-   (Vite recommended over hand-rolled esbuild for DX) so future changes don't
-   require re-editing minified output.
-2. Add the employer-side "steward/admin" view (approving new postings before
-   they go public, handling disputes) — currently postings go live
-   immediately with no moderation step.
-3. Consider real notifications (the "your seal was pressed" moment is the
-   strongest re-engagement hook and currently only shows as an in-session
-   toast).
-4. Party-quest flow currently only unlocks rank access — reward splitting
-   across party members on completion isn't implemented yet.
+Everything above was previously the roadmap and is now done — the list below
+is fresh candidates, not yet scoped or prioritized with the user:
+
+1. Quest-card click/tap currently doesn't obviously open a detail view from
+   the board — worth checking the intended interaction (petition flow may
+   require a different affordance than a plain click) and making it more
+   discoverable.
+2. Steward tools are self-service (any player can flip the toggle in their
+   own settings) — fine for a prototype, but flag before this goes further
+   that real moderator permissions need actual auth, not a client-side flag.
+3. No automated tests exist for any of the flows above (moderation, party
+   split, notifications) — worth at least a smoke-test script if this keeps
+   growing.
