@@ -216,15 +216,72 @@ North-star metric: **quests completed per active member per month.**
    it's a divided pool rather than per-member payout (no persisted account
    for NPC roster members).
 
-## Suggested next steps for Claude Code
+## Beta → launch technical requirements (ranked, 2026-07-25)
 
-Everything above was previously the roadmap and is now done — the list below
-is fresh candidates, not yet scoped or prioritized with the user:
+Everything in "Done since the original handoff" was the old roadmap and is
+done. This list is what's actually left before real (non-prototype) users can
+use this, ranked by dependency order — earlier tiers block later ones.
 
-1. Quest-card click/tap already opens a full detail modal (title, desc,
-   employer, reward, grants, Save/Petition) — confirmed working, not a bug.
-2. Steward Tools is still a self-service client-side flag (no real auth) —
-   fine for a prototype, but flag before this goes further.
-3. No automated tests exist for any of the flows above (moderation, party
-   split, notifications) — worth at least a smoke-test script if this keeps
-   growing.
+**Tier 1 — Blocking foundation (nothing else works for real users without these)**
+1. **Real backend + multi-user database.** The entire app today is
+   single-player/localStorage with simulated NPCs (seed petitioners, seed
+   steward queue, etc.). Every item below assumes real accounts and shared
+   state that doesn't exist yet.
+2. **Admin console / control panel.** A separate control surface (not just
+   the in-app Steward's Ledger) to run every operational aspect of the
+   platform: user account management (verify, suspend, support rank
+   overrides), global moderation oversight (all postings/disputes/steward
+   actions across all users, not just one player's own), Tavern partner-venue
+   roster management (see Tier 3), payments/scrip oversight, ID-verification
+   review queue, and an analytics dashboard for the north-star and
+   phase-gate metrics already defined in "Product roadmap" above. In-fiction,
+   this is where a real human plays "the Guild Council" — right now that's
+   just an NPC label on auto-resolved actions.
+3. **Real authentication** — Google OAuth + email/phone, replacing the
+   stubbed landing-screen auth, tied to the real backend above.
+4. **Real ID verification integration** (e.g. Stripe Identity, Persona,
+   Onfido) — replaces the "mock ID verification, mark as verified" button.
+
+**Tier 2 — Trust & economy infrastructure (before money or liability is real)**
+5. **Payments integration** (Stripe Connect or equivalent) for scrip
+   payout/escrow, plus 1099 tax reporting. Gig-economy labor classification
+   already flagged elsewhere in this doc as needing legal review before this
+   ships.
+6. **Insurance partner integration** for the D+ "guild-covered insurance"
+   promise — currently just UI copy with nothing behind it.
+7. **Server-side enforcement of steward permissions.** The rank-ceiling /
+   no-self-review governance logic (`canStewardApprove` in `App.jsx`) is
+   correct but client-side only; once other real accounts exist it must be
+   enforced server-side via the Admin Console's role system, not trusted
+   from the client.
+
+**Tier 3 — Engagement & the Tavern partner network**
+8. **Multi-venue partner network for "The Tavern."** Since there's no fixed
+   physical location at launch, "The Tavern" becomes a rotating roster of
+   partner bars/breweries. Each partner venue needs: name/address, real
+   coordinates + geofence radius for check-in, an active rotation window,
+   and per-venue perks/promo terms — this is also the mechanism for
+   promotional partnerships (sponsors get check-in/redemption analytics).
+   Managed via the Admin Console (item 2). **Open design question, not yet
+   decided:** is "The Tavern" *one active venue at a time* (rotates on a
+   schedule, the app just shows wherever it currently is), or *multiple
+   simultaneous partner venues* the player picks from a list/map? This
+   changes the data model (single current-venue value vs. a real
+   venue-selection UI) and must be settled before scoping the work.
+   Also changes the "Tavern beta" phase metric from one door's conversion
+   rate to per-venue + aggregate conversion.
+9. **Push notifications** (web push / FCM / APNs) replacing the in-app-only
+   inbox — flagged as the strongest re-engagement hook.
+10. **Real ratings/reviews** replacing simulated NPC petitioners, once real
+    other users exist to rate.
+
+**Tier 4 — Quality/ops**
+11. Automated tests for existing flows (moderation, party split,
+    notifications) — none exist today.
+12. Real CI/CD pipeline — deploy is currently manual (`npm run build` →
+    copy `dist/index.html` → commit).
+
+**Tier 5 — Rollout gates (product decisions, not engineering tasks)**
+13. Private alpha — F/E ranks only, ~50–100 members, one city (cold-start
+    liquidity test, see "Product roadmap" above).
+14. Multi-city chapters — only after one city's unit economics prove out.
