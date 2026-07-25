@@ -1,0 +1,23 @@
+// `window.storage` is provided when this app runs inside Claude; standalone
+// (GitHub Pages) builds fall back to localStorage so persistence still works.
+if (!window.storage) {
+  window.storage = {
+    async get(key) {
+      const value = localStorage.getItem(key);
+      return value == null ? null : { key, value };
+    },
+    async set(key, value) {
+      localStorage.setItem(key, value);
+      return { key, value };
+    },
+    async delete(key) {
+      localStorage.removeItem(key);
+      return { key, deleted: true };
+    },
+    async list(prefix) {
+      return {
+        keys: Object.keys(localStorage).filter((k) => !prefix || k.startsWith(prefix)),
+      };
+    },
+  };
+}

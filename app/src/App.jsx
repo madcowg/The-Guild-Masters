@@ -1,0 +1,2126 @@
+import React, { useState, useEffect, useMemo } from "react";
+import {
+  RANKS,
+  RANK_COLORS,
+  XP_PER_RANK,
+  RANK_XP_THRESHOLD,
+  STAT_KEYS,
+  STAT_NAMES,
+  STAT_DESCRIPTIONS,
+  tierForStat,
+  SEED_QUESTS,
+  SEED_ROSTER,
+  SEED_PETITIONERS,
+  SEED_FORUM_POSTS,
+  SEED_DM_THREADS,
+  ACHIEVEMENTS,
+  BUFFS,
+  INITIAL_PLAYER,
+  statRewardForRank,
+  xpForLevel,
+  levelFromXp,
+} from "./constants.js";
+import { Logo, StatIcon, NavIcon, BellIcon } from "./icons.jsx";
+import { QuestCard } from "./components/QuestCard.jsx";
+  function App() {
+    let [authScreen, setAuthScreen] = useState("landing"),
+      [tab, setTab] = useState("boards"),
+      [player, setPlayer] = useState(INITIAL_PLAYER),
+      [hasLoaded, setHasLoaded] = useState(false),
+      [contact, setContact] = useState(""),
+      [ageConfirmed, setAgeConfirmed] = useState(false),
+      [verifyCode, setVerifyCode] = useState(""),
+      [nameInput, setNameInput] = useState(""),
+      [toast, setToast] = useState(null),
+      [ratingTarget, setRatingTarget] = useState(null),
+      [openQuest, setOpenQuest] = useState(null),
+      [forumPosts, setForumPosts] = useState(SEED_FORUM_POSTS),
+      [dmThreads, setDmThreads] = useState(SEED_DM_THREADS),
+      [activeThreadId, setActiveThreadId] = useState(null),
+      [messageDraft, setMessageDraft] = useState(""),
+      [noticeDraft, setNoticeDraft] = useState(""),
+      [petitionDraft, setPetitionDraft] = useState(""),
+      [rankFilter, setRankFilter] = useState("ALL"),
+      [boardTab, setBoardTab] = useState("jobs"),
+      [sheetStatTab, setSheetStatTab] = useState("STR"),
+      [statGainPopup, setStatGainPopup] = useState(null),
+      [draftPosting, setDraftPosting] = useState(null),
+      [settingsOpen, setSettingsOpen] = useState(false),
+      [notifOpen, setNotifOpen] = useState(false),
+      allQuests = useMemo(
+        () => [...SEED_QUESTS, ...(player.myPostings || [])],
+        [player.myPostings],
+      );
+    (useEffect(() => {
+      (async () => {
+        try {
+          let s = await window.storage.get("gm:player");
+          if (s && s.value) {
+            let S = JSON.parse(s.value);
+            ((S = {
+              ...INITIAL_PLAYER,
+              ...S,
+              profile: {
+                ...INITIAL_PLAYER.profile,
+                ...(S.profile || {}),
+              },
+              doneSinceRefresh: S.doneSinceRefresh ?? S.completed ?? [],
+              myPostings: (S.myPostings || []).map((N) => ({
+                status: "open",
+                petitions: [],
+                taker: null,
+                myRating: null,
+                ...N,
+              })),
+            }),
+              S.name && (setPlayer(S), setAuthScreen("app")));
+          }
+        } catch {}
+        setHasLoaded(true);
+      })();
+    }, []),
+      useEffect(() => {
+        !hasLoaded ||
+          !player.name ||
+          (async () => {
+            try {
+              await window.storage.set("gm:player", JSON.stringify(player));
+            } catch (s) {
+              console.error(s);
+            }
+          })();
+      }, [player, hasLoaded]));
+    let showToast = (s) => {
+        (setToast(s), setTimeout(() => setToast(null), 2600));
+      },
+      pushNotification = (text) =>
+        setPlayer((S) => ({
+          ...S,
+          notifications: [
+            { id: "n" + Date.now() + Math.random(), text, ts: Date.now(), read: false },
+            ...(S.notifications || []),
+          ].slice(0, 50),
+        })),
+      currentLevel = levelFromXp(player.xp),
+      unreadNotifications = (player.notifications || []).filter((n) => !n.read).length,
+      rankIndex = RANKS.indexOf(player.rank),
+      nextRank = RANKS[rankIndex + 1],
+      canAttemptTrial = nextRank && player.xp >= RANK_XP_THRESHOLD[nextRank],
+      effectiveRankIndex = rankIndex + (player.party ? 1 : 0),
+      addAchievements = (s) => {
+        let freshlyEarned = s.filter((id) => !player.achievements.includes(id));
+        setPlayer((S) => ({
+          ...S,
+          achievements: [...new Set([...S.achievements, ...s])],
+        }));
+        freshlyEarned.forEach((id) => {
+          let a = ACHIEVEMENTS.find((x) => x.id === id);
+          if (a) pushNotification(`Achievement unlocked: ${a.name} — ${a.desc}.`);
+        });
+      },
+      saveToSatchel = (s) => {
+        (setPlayer((S) => ({
+          ...S,
+          saved: [...new Set([...S.saved, s.id])],
+        })),
+          showToast("Card saved to your satchel."));
+      },
+      removeFromSatchel = (s) =>
+        setPlayer((S) => ({
+          ...S,
+          saved: S.saved.filter((N) => N !== s.id),
+        })),
+      petitionForQuest = (s) => {
+        if (s.mine)
+          return showToast(
+            "You cannot take your own posting \u2014 but another adventurer soon will.",
+          );
+        if (RANKS.indexOf(s.rank) > effectiveRankIndex)
+          return showToast(
+            player.party
+              ? "Beyond even your party's reach \u2014 for now."
+              : "Above your rank. Save it, or form a party.",
+          );
+        if (s.tavernOnly && !player.atTavern)
+          return showToast(
+            "This contract is only offered within the Tavern's walls. Check in first.",
+          );
+        let viaParty = !!player.party && RANKS.indexOf(s.rank) > rankIndex;
+        (setPlayer((N) => ({
+          ...N,
+          pending: [...N.pending, s.id],
+          saved: N.saved.filter((U) => U !== s.id),
+          partyAssisted: viaParty
+            ? { ...N.partyAssisted, [s.id]: true }
+            : N.partyAssisted,
+        })),
+          setOpenQuest(null),
+          showToast("Petition sent \u2014 awaiting the employer's seal."));
+      },
+      refreshBoard = () => {
+        let s = (player.doneSinceRefresh || []).length;
+        if (!s)
+          return showToast("The boards are already full of fresh postings.");
+        (setPlayer((S) => ({
+          ...S,
+          doneSinceRefresh: [],
+        })),
+          showToast(
+            `The steward pins ${s} fresh posting${s > 1 ? "s" : ""} to the boards.`,
+          ));
+      },
+      submitPosting = () => {
+        let s = statRewardForRank(draftPosting.rank),
+          S = {};
+        for (let U = 0; U < s.pts; U++) {
+          let pt = draftPosting.stats[U % draftPosting.stats.length];
+          S[pt] = (S[pt] || 0) + 1;
+        }
+        let N = {
+          id: "u" + Date.now(),
+          rank: draftPosting.rank,
+          title: draftPosting.title.trim(),
+          desc: draftPosting.desc.trim(),
+          type: draftPosting.type,
+          stats: S,
+          scrip: draftPosting.barter ? 0 : Number(draftPosting.scrip) || 0,
+          employer: player.name,
+          barter: draftPosting.barter,
+          barterFor: draftPosting.barter
+            ? draftPosting.barterFor.trim()
+            : void 0,
+          tavernOnly: RANKS.indexOf(draftPosting.rank) >= 4,
+          mine: true,
+          status: "pendingReview",
+          petitions: [],
+          taker: null,
+          myRating: null,
+          disputed: false,
+        };
+        (setPlayer((U) => ({
+          ...U,
+          myPostings: [...(U.myPostings || []), N],
+        })),
+          setDraftPosting(null),
+          setBoardTab(N.barter ? "barter" : "jobs"),
+          showToast(
+            "Your contract is queued for the Steward's Ledger, pending guild review.",
+          ));
+      },
+      updateMyPosting = (s, S) =>
+        setPlayer((N) => ({
+          ...N,
+          myPostings: N.myPostings.map((U) => (U.id === s ? S(U) : U)),
+        })),
+      approvePosting = (s) => {
+        (updateMyPosting(s.id, (N) => ({
+          ...N,
+          status: "open",
+        })),
+          showToast(`"${s.title}" approved and pinned to the board.`),
+          pushNotification(`The Guild Council approved your posting "${s.title}" — it's now live.`));
+      },
+      rejectPosting = (s) => {
+        (setPlayer((N) => ({
+          ...N,
+          myPostings: N.myPostings.filter((U) => U.id !== s.id),
+        })),
+          showToast(`"${s.title}" was rejected by the Guild Council.`),
+          pushNotification(`Your posting "${s.title}" was rejected by the Guild Council.`));
+      },
+      resolvePostingDispute = (s) => {
+        (updateMyPosting(s.id, (N) => ({
+          ...N,
+          disputed: false,
+        })),
+          showToast("Dispute marked resolved by the Guild Council."));
+      },
+      resolveTakerDispute = (s) => {
+        (setPlayer((N) => ({
+          ...N,
+          disputes: N.disputes.filter((U) => U.id !== s.id),
+        })),
+          showToast("Dispute marked resolved by the Guild Council."));
+      },
+      crierBringsPetitions = (s) => {
+        let S = SEED_PETITIONERS.filter(
+          (pt) =>
+            RANKS.indexOf(pt.rank) >= RANKS.indexOf(s.rank) &&
+            !s.petitions.some((Bl) => Bl.name === pt.name),
+        );
+        if (!S.length)
+          return showToast(
+            "The crier calls, but every eligible adventurer has already petitioned.",
+          );
+        let N = Math.min(S.length, 1 + Math.floor(Math.random() * 2)),
+          U = [...S].sort(() => Math.random() - 0.5).slice(0, N);
+        (updateMyPosting(s.id, (pt) => ({
+          ...pt,
+          petitions: [...pt.petitions, ...U],
+        })),
+          showToast(
+            `The town crier calls your contract \u2014 ${N} petition${N > 1 ? "s" : ""} arrive${N > 1 ? "" : "s"}.`,
+          ));
+      },
+      sealPetition = (s, S) => {
+        (updateMyPosting(s.id, (N) => ({
+          ...N,
+          status: "sealed",
+          taker: S,
+          petitions: [],
+        })),
+          showToast(`You press your seal. ${S.name} takes up the contract.`));
+      },
+      declinePetition = (s, S) => {
+        (updateMyPosting(s.id, (N) => ({
+          ...N,
+          petitions: N.petitions.filter((U) => U.name !== S.name),
+        })),
+          showToast(
+            `You decline ${S.name}'s petition, with the guild's courtesy.`,
+          ));
+      },
+      confirmAndRelease = (s, S) => {
+        (updateMyPosting(s.id, (N) => ({
+          ...N,
+          status: "done",
+          myRating: S,
+          disputed: S <= 2,
+        })),
+          setPlayer((N) => ({
+            ...N,
+            scrip: N.scrip - (s.barter ? 0 : s.scrip),
+            achievements: [...new Set([...N.achievements, "patron"])],
+          })),
+          showToast(
+            s.barter
+              ? `Trade fulfilled. You and ${s.taker.name} part as friends of the guild.`
+              : `Work confirmed. ${s.scrip} scrip released to ${s.taker.name}.`,
+          ),
+          S <= 2 &&
+            pushNotification(
+              `Low rating recorded on "${s.title}" — flagged for the Steward's Ledger.`,
+            ));
+      },
+      handleAvatarUpload = (s) => {
+        let S = s.target.files && s.target.files[0];
+        if (!S) return;
+        let N = new Image();
+        ((N.onload = () => {
+          let U = document.createElement("canvas"),
+            pt = 128;
+          ((U.width = pt), (U.height = pt));
+          let Bl = U.getContext("2d"),
+            Hl = Math.min(N.width, N.height);
+          (Bl.drawImage(
+            N,
+            (N.width - Hl) / 2,
+            (N.height - Hl) / 2,
+            Hl,
+            Hl,
+            0,
+            0,
+            pt,
+            pt,
+          ),
+            setPlayer((yu) => ({
+              ...yu,
+              avatar: U.toDataURL("image/jpeg", 0.82),
+            })),
+            showToast("Your portrait now hangs in the guild registry."));
+        }),
+          (N.src = URL.createObjectURL(S)));
+      },
+      petitionAccepted = (s) => {
+        (setPlayer((S) => ({
+          ...S,
+          pending: S.pending.filter((N) => N !== s),
+          active: [...S.active, s],
+        })),
+          showToast("The employer has pressed their seal. Quest active!"),
+          pushNotification("Your seal was pressed — a quest is now active."));
+      },
+      openRatingModal = (s) => setRatingTarget(s),
+      completeQuestAndRate = (s, S) => {
+        // Party quests were only reachable because the party bumped effective
+        // rank by one (see petitionForQuest); the reward pool is split across
+        // the party rather than paid out in full to each member, since there's
+        // no separate persisted account for the NPC roster members here.
+        let partySize = 1 + (player.party ? player.party.members.length : 0),
+          assisted = partySize > 1 && !!(player.partyAssisted || {})[s.id],
+          myXp = assisted ? Math.ceil(XP_PER_RANK[s.rank] / partySize) : XP_PER_RANK[s.rank],
+          myScrip = assisted ? Math.ceil(s.scrip / partySize) : s.scrip,
+          statKeys = Object.keys(s.stats),
+          totalPts = Object.values(s.stats).reduce((a, b) => a + b, 0),
+          myPts = assisted ? Math.ceil(totalPts / partySize) : totalPts,
+          myStatGain = {};
+        for (let i = 0; i < myPts; i++) {
+          let k = statKeys[i % statKeys.length];
+          myStatGain[k] = (myStatGain[k] || 0) + 1;
+        }
+        (setPlayer((N) => {
+          let U = {
+            ...N.stats,
+          };
+          Object.entries(myStatGain).forEach(([Hl, yu]) => (U[Hl] += yu));
+          let pt = [...N.completed, s.id],
+            Bl = [];
+          return (
+            pt.length >= 1 && Bl.push("first"),
+            pt.length >= 3 && Bl.push("trio"),
+            s.barter && Bl.push("barter"),
+            {
+              ...N,
+              stats: U,
+              xp: N.xp + myXp,
+              scrip: N.scrip + myScrip,
+              active: N.active.filter((Hl) => Hl !== s.id),
+              completed: pt,
+              doneSinceRefresh: [...(N.doneSinceRefresh || []), s.id],
+              achievements: [...new Set([...N.achievements, ...Bl])],
+              ratingsGiven: {
+                ...N.ratingsGiven,
+                [s.id]: S,
+              },
+              partyAssisted: Object.fromEntries(
+                Object.entries(N.partyAssisted || {}).filter(([k]) => k !== s.id),
+              ),
+              disputes:
+                S <= 2
+                  ? [
+                      ...(N.disputes || []),
+                      {
+                        id: "d" + Date.now(),
+                        questId: s.id,
+                        title: s.title,
+                        employer: s.employer,
+                        rating: S,
+                        ts: Date.now(),
+                      },
+                    ]
+                  : N.disputes,
+            }
+          );
+        }),
+          setRatingTarget(null),
+          setStatGainPopup([
+            ...Object.entries(myStatGain).map(([N, U]) => ({
+              k: N,
+              v: U,
+            })),
+            {
+              k: "XP",
+              v: myXp,
+            },
+          ]),
+          setTimeout(() => setStatGainPopup(null), 2400),
+          showToast(
+            `Quest complete! +${myXp} XP${myScrip ? `, +${myScrip} scrip` : s.barter ? ", barter fulfilled" : ""}${assisted ? ` (split among your party of ${partySize})` : ""}.`,
+          ),
+          pushNotification(
+            `Quest "${s.title}" complete — +${myXp} XP${myScrip ? `, +${myScrip} scrip` : ""}.`,
+          ),
+          S <= 2 &&
+            pushNotification(
+              `You flagged a low rating for "${s.title}" — sent to the Steward's Ledger.`,
+            ));
+      },
+      attemptRankTrial = () => {
+        (setPlayer((s) => {
+          let S = RANKS[RANKS.indexOf(s.rank) + 1],
+            N = [];
+          return (
+            S === "E" && N.push("erank"),
+            S === "D" && N.push("drank"),
+            {
+              ...s,
+              rank: S,
+              achievements: [...new Set([...s.achievements, ...N])],
+            }
+          );
+        }),
+          showToast(`Trial passed. You are now Rank ${nextRank}.`),
+          pushNotification(`Trial passed — you are now Rank ${nextRank}.`));
+      },
+      formParty = () => {
+        (setPlayer((s) => ({
+          ...s,
+          party: {
+            name: "New Fellowship",
+            members: [],
+          },
+        })),
+          addAchievements(["party"]));
+      },
+      recruitToParty = (s) =>
+        setPlayer((S) => ({
+          ...S,
+          party: {
+            ...S.party,
+            members: [...S.party.members, s.id],
+          },
+        })),
+      signOut = async () => {
+        try {
+          await window.storage.delete("gm:player");
+        } catch {}
+        (setPlayer(INITIAL_PLAYER),
+          setAuthScreen("landing"),
+          setContact(""),
+          setVerifyCode(""),
+          setAgeConfirmed(false),
+          setNameInput(""));
+      },
+      findQuestById = (s) => allQuests.find((S) => S.id === s);
+    return (
+      <div className="gm-root">
+        {toast && <div className="toast">{toast}</div>}
+        {statGainPopup && (
+          <div className="gains" aria-hidden="true">
+            {statGainPopup.map((s, S) => (
+              <div
+                key={S}
+                className="gain-chip"
+                style={{
+                  animationDelay: `${S * 0.18}s`,
+                }}
+              >
+                {s.k !== "XP" && <StatIcon s={s.k} />}
+                <b>+{s.v}</b> {s.k}
+              </div>
+            ))}
+          </div>
+        )}
+        {authScreen !== "app" && (
+          <div className="gate">
+            <div className="gate-card">
+              <div className="crest">✦</div>
+              <h1 className="brand">The Guild Masters</h1>
+              <p className="brand-sub">
+                Companion to The Tavern · High Fantasy Chapter
+              </p>
+              {authScreen === "landing" && (
+                <React.Fragment>
+                  <p className="gate-copy">
+                    Real quests. Real neighbors. Real progression. Rise from
+                    Rank F to Rank S by lending your hands, wits, and company to
+                    the city.
+                  </p>
+                  <label className="field-label">Email or phone</label>
+                  <input
+                    className="field"
+                    value={contact}
+                    onChange={(s) => setContact(s.target.value)}
+                    placeholder="you@realm.com or +1 555 0100"
+                  />
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={ageConfirmed}
+                      onChange={(s) => setAgeConfirmed(s.target.checked)}
+                    />
+                    <span>I confirm I am 18 years or older</span>
+                  </label>
+                  <button
+                    className="btn gold"
+                    disabled={!contact || !ageConfirmed}
+                    onClick={() => setAuthScreen("verify")}
+                  >
+                    Send verification code
+                  </button>
+                  <p className="fine">
+                    Membership requires government ID verification. Guild
+                    membership covers job insurance for active members and
+                    Tavern club entry from Rank D.
+                  </p>
+                </React.Fragment>
+              )}
+              {authScreen === "verify" && (
+                <React.Fragment>
+                  <p className="gate-copy">
+                    A six-digit sigil was sent to <b>{contact}</b>. (Demo: enter
+                    any 6 digits.)
+                  </p>
+                  <input
+                    className="field code"
+                    maxLength={6}
+                    value={verifyCode}
+                    onChange={(s) =>
+                      setVerifyCode(s.target.value.replace(/\D/g, ""))
+                    }
+                    placeholder={"\u2022\u2022\u2022\u2022\u2022\u2022"}
+                  />
+                  <button
+                    className="btn gold"
+                    disabled={verifyCode.length !== 6}
+                    onClick={() => setAuthScreen("idcheck")}
+                  >
+                    Verify
+                  </button>
+                  <button
+                    className="btn ghost"
+                    onClick={() => setAuthScreen("landing")}
+                  >
+                    Back
+                  </button>
+                </React.Fragment>
+              )}
+              {authScreen === "idcheck" && (
+                <React.Fragment>
+                  <p className="gate-copy">
+                    The Guild requires a valid government ID to protect all
+                    members. Your documents are reviewed by guild staff and
+                    never shown to other adventurers.
+                  </p>
+                  <button
+                    className="btn gold"
+                    onClick={() => setAuthScreen("create")}
+                  >
+                    Upload ID (demo: mark as verified)
+                  </button>
+                </React.Fragment>
+              )}
+              {authScreen === "create" && (
+                <React.Fragment>
+                  <p className="gate-copy">
+                    ID verified ✓ — Welcome, recruit. Every legend begins at
+                    Rank F. Choose your adventurer name.
+                  </p>
+                  <input
+                    className="field"
+                    value={nameInput}
+                    onChange={(s) => setNameInput(s.target.value)}
+                    placeholder="e.g. Wren of the North Market"
+                  />
+                  <button
+                    className="btn gold"
+                    disabled={!nameInput.trim()}
+                    onClick={() => {
+                      (setPlayer({
+                        ...INITIAL_PLAYER,
+                        name: nameInput.trim(),
+                        profile: {
+                          ...INITIAL_PLAYER.profile,
+                          email: contact.includes("@") ? contact : "",
+                          phone: contact.includes("@") ? "" : contact,
+                        },
+                      }),
+                        setAuthScreen("app"));
+                    }}
+                  >
+                    Take the Guild Oath
+                  </button>
+                </React.Fragment>
+              )}
+            </div>
+          </div>
+        )}
+        {authScreen === "app" && (
+          <React.Fragment>
+            <div className="banner">
+              <Logo />
+              <div>
+                <div className="banner-title">The Guild Masters</div>
+                <div className="banner-sub">
+                  Quests among neighbors · High Fantasy Chapter
+                </div>
+              </div>
+            </div>
+            <header className="topbar">
+              <button
+                className="topbar-left"
+                onClick={() => setTab("sheet")}
+                title="Open your profile"
+              >
+                {player.avatar ? (
+                  <img className="tb-ava" src={player.avatar} alt="" />
+                ) : (
+                  <span className="crest small">✦</span>
+                )}
+                <span className="tb-id">
+                  <span className="tb-name">{player.name}</span>
+                  <span className="tb-sub">
+                    Rank{" "}
+                    <b
+                      style={{
+                        color: RANK_COLORS[player.rank],
+                      }}
+                    >
+                      {player.rank}
+                    </b>{" "}
+                    · Lv {currentLevel}
+                  </span>
+                </span>
+              </button>
+              <div className="topbar-right">
+                <span className="scrip">⛁ {player.scrip} scrip</span>
+                <span
+                  className={"tavern-dot " + (player.atTavern ? "in" : "")}
+                  title={player.atTavern ? "At the Tavern" : "Away"}
+                >
+                  ◉
+                </span>
+                <div className="notif-wrap">
+                  <button
+                    className="icon-btn"
+                    title="Notifications"
+                    aria-label="Notifications"
+                    onClick={() => {
+                      let opening = !notifOpen;
+                      setNotifOpen(opening);
+                      if (opening)
+                        setPlayer((S) => ({
+                          ...S,
+                          notifications: (S.notifications || []).map((n) => ({
+                            ...n,
+                            read: true,
+                          })),
+                        }));
+                    }}
+                  >
+                    <BellIcon />
+                    {unreadNotifications > 0 && (
+                      <span className="notif-badge">{unreadNotifications}</span>
+                    )}
+                  </button>
+                  {notifOpen && (
+                    <div className="notif-panel">
+                      <div className="notif-panel-title">Notifications</div>
+                      {(player.notifications || []).length === 0 ? (
+                        <p className="empty">No notifications yet.</p>
+                      ) : (
+                        (player.notifications || []).map((n) => (
+                          <div key={n.id} className="notif-row">
+                            {n.text}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </header>
+            <main className="content">
+              {tab === "boards" && (
+                <section>
+                  <div className="board-head">
+                    <h2 className="h2">
+                      {boardTab === "jobs"
+                        ? "The Job Board"
+                        : "The Barter Board"}
+                    </h2>
+                    <div className="board-actions">
+                      <button
+                        className="btn tiny gold"
+                        onClick={() =>
+                          setDraftPosting({
+                            title: "",
+                            desc: "",
+                            rank: player.rank,
+                            type: "Labor",
+                            barter: boardTab === "barter",
+                            scrip: 50,
+                            barterFor: "",
+                            stats: [],
+                          })
+                        }
+                      >
+                        Post a contract
+                      </button>
+                      <button className="btn tiny ghost" onClick={refreshBoard}>
+                        Fresh postings
+                      </button>
+                    </div>
+                  </div>
+                  <div className="subtabs">
+                    <button
+                      className={"subtab " + (boardTab === "jobs" ? "on" : "")}
+                      onClick={() => setBoardTab("jobs")}
+                    >
+                      Jobs · scrip
+                    </button>
+                    <button
+                      className={
+                        "subtab " + (boardTab === "barter" ? "on" : "")
+                      }
+                      onClick={() => setBoardTab("barter")}
+                    >
+                      Barter · trade
+                    </button>
+                  </div>
+                  <p className="lede">
+                    {boardTab === "jobs"
+                      ? "Contracts posted by your neighbors, hung on the guild pegs. Take what your rank allows; save the rest for later or for a party."
+                      : "No coin changes hands here. These quests are paid in trades, lessons, and favors \u2014 offer what you have, gain what you lack."}
+                  </p>
+                  <div className="filters">
+                    {["ALL", ...RANKS].map((s) => (
+                      <button
+                        key={s}
+                        className={"chip " + (rankFilter === s ? "on" : "")}
+                        style={
+                          s === "ALL"
+                            ? {}
+                            : {
+                                color: RANK_COLORS[s],
+                                borderColor:
+                                  rankFilter === s ? RANK_COLORS[s] : "#4A3550",
+                                background:
+                                  rankFilter === s
+                                    ? "rgba(255,255,255,.06)"
+                                    : "transparent",
+                              }
+                        }
+                        onClick={() => setRankFilter(s)}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="card-grid">
+                    {allQuests
+                      .filter((s) => s.status !== "pendingReview")
+                      .filter(
+                        (s) =>
+                          !(player.doneSinceRefresh || []).includes(s.id) &&
+                          !player.active.includes(s.id) &&
+                          !player.pending.includes(s.id),
+                      )
+                      .filter((s) =>
+                        boardTab === "barter" ? s.barter : !s.barter,
+                      )
+                      .filter(
+                        (s) => rankFilter === "ALL" || s.rank === rankFilter,
+                      )
+                      .map((s, S) => (
+                        <QuestCard
+                          key={s.id}
+                          q={s}
+                          i={S}
+                          locked={
+                            !s.mine &&
+                            RANKS.indexOf(s.rank) > effectiveRankIndex
+                          }
+                          saved={player.saved.includes(s.id)}
+                          onOpen={() => setOpenQuest(s)}
+                        />
+                      ))}
+                  </div>
+                </section>
+              )}
+              {tab === "quests" && (
+                <section>
+                  <h2 className="h2">My Quests</h2>
+                  {(player.myPostings || []).length > 0 && (
+                    <div className="bucket">
+                      <h3 className="h3">
+                        The Employer's Desk — your postings
+                      </h3>
+                      {player.myPostings.map((s) => (
+                        <div key={s.id} className="panel desk">
+                          <div className="desk-head">
+                            <span
+                              className="qr-rank"
+                              style={{
+                                background: RANK_COLORS[s.rank],
+                              }}
+                            >
+                              {s.rank}
+                            </span>
+                            <div className="qr-main">
+                              <div className="qr-title">{s.title}</div>
+                              <div className="qr-sub">
+                                {s.barter
+                                  ? `Barter: ${s.barterFor}`
+                                  : `${s.scrip} scrip in escrow`}{" "}
+                                ·{" "}
+                                {s.status === "pendingReview"
+                                  ? "Awaiting guild review \u2014 not yet visible on the board"
+                                  : s.status === "open"
+                                    ? s.petitions.length
+                                      ? `${s.petitions.length} petition${s.petitions.length > 1 ? "s" : ""} await your seal`
+                                      : "Open \u2014 awaiting petitions"
+                                    : s.status === "sealed"
+                                      ? `Sealed to ${s.taker.name} \u2014 at work`
+                                      : `Fulfilled by ${s.taker.name} \xB7 You rated ${"\u2605".repeat(s.myRating)}${s.disputed ? " \xB7 Disputed" : ""}`}
+                              </div>
+                            </div>
+                            {s.status === "open" && (
+                              <button
+                                className="btn tiny"
+                                onClick={() => crierBringsPetitions(s)}
+                              >
+                                Call the crier (demo)
+                              </button>
+                            )}
+                          </div>
+                          {s.status === "open" &&
+                            s.petitions.map((S) => (
+                              <div key={S.name} className="petition">
+                                <span
+                                  className="qr-rank"
+                                  style={{
+                                    background: RANK_COLORS[S.rank],
+                                  }}
+                                >
+                                  {S.rank}
+                                </span>
+                                <div className="qr-main">
+                                  <div className="qr-title">
+                                    {S.name}{" "}
+                                    <span className="pet-meta">
+                                      ★ {S.rating} · {S.deeds} deeds
+                                    </span>
+                                  </div>
+                                  <div className="qr-sub">“{S.note}”</div>
+                                </div>
+                                <div className="pet-actions">
+                                  <button
+                                    className="btn tiny gold"
+                                    onClick={() => sealPetition(s, S)}
+                                  >
+                                    Press seal
+                                  </button>
+                                  <button
+                                    className="btn tiny ghost"
+                                    onClick={() => declinePetition(s, S)}
+                                  >
+                                    Decline
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          {s.status === "sealed" && (
+                            <div className="petition confirm-row">
+                              <div className="qr-main">
+                                <div className="qr-sub">
+                                  When {s.taker.name} delivers the deed, confirm
+                                  & rate to release{" "}
+                                  {s.barter ? "your trade" : "the scrip"}:
+                                </div>
+                              </div>
+                              <div className="mini-stars">
+                                {[1, 2, 3, 4, 5].map((S) => (
+                                  <button
+                                    key={S}
+                                    className="mini-star"
+                                    title={`${S} star${S > 1 ? "s" : ""}`}
+                                    onClick={() => confirmAndRelease(s, S)}
+                                  >
+                                    ★
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {["saved", "pending", "active", "completed"].map((s) => (
+                    <div key={s} className="bucket">
+                      <h3 className="h3">
+                        {
+                          {
+                            saved: "Satchel (saved cards)",
+                            pending: "Awaiting employer's seal",
+                            active: "Active contracts",
+                            completed: "Deeds done",
+                          }[s]
+                        }
+                      </h3>
+                      {player[s].length === 0 && (
+                        <p className="empty">
+                          Nothing here yet. The board awaits.
+                        </p>
+                      )}
+                      {player[s].map((S, N) => {
+                        let U = findQuestById(S);
+                        return (
+                          <div key={S + "-" + N} className="quest-row">
+                            <span
+                              className="qr-rank"
+                              style={{
+                                background: RANK_COLORS[U.rank],
+                              }}
+                            >
+                              {U.rank}
+                            </span>
+                            <div className="qr-main">
+                              <div className="qr-title">{U.title}</div>
+                              <div className="qr-sub">
+                                {U.employer} ·{" "}
+                                {U.barter
+                                  ? `Barter: ${U.barterFor}`
+                                  : `${U.scrip} scrip`}
+                                {s === "completed" && player.ratingsGiven[S]
+                                  ? ` \xB7 You rated ${"\u2605".repeat(player.ratingsGiven[S])}`
+                                  : ""}
+                              </div>
+                            </div>
+                            {s === "saved" && (
+                              <React.Fragment>
+                                <button
+                                  className="btn tiny"
+                                  onClick={() => petitionForQuest(U)}
+                                >
+                                  Take
+                                </button>
+                                <button
+                                  className="btn tiny ghost"
+                                  onClick={() => removeFromSatchel(U)}
+                                >
+                                  Drop
+                                </button>
+                              </React.Fragment>
+                            )}
+                            {s === "pending" && (
+                              <button
+                                className="btn tiny"
+                                onClick={() => petitionAccepted(S)}
+                              >
+                                Simulate seal (demo)
+                              </button>
+                            )}
+                            {s === "active" && (
+                              <button
+                                className="btn tiny gold"
+                                onClick={() => openRatingModal(U)}
+                              >
+                                Mark complete
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </section>
+              )}
+              {tab === "party" && (
+                <section>
+                  <h2 className="h2">Fellowship</h2>
+                  <p className="lede">
+                    Some quests outmatch a lone adventurer. A party lets you
+                    attempt contracts one rank above your own, and pool
+                    different skills.
+                  </p>
+                  {player.party ? (
+                    <React.Fragment>
+                      <div className="panel">
+                        <b>{player.party.name}</b> ·{" "}
+                        {player.party.members.length + 1} member
+                        {player.party.members.length ? "s" : ""}
+                        <div
+                          className="qr-sub"
+                          style={{
+                            marginTop: 6,
+                          }}
+                        >
+                          Party bonus active: you may take quests up to Rank{" "}
+                          {RANKS[Math.min(rankIndex + 1, 6)]}.
+                        </div>
+                      </div>
+                      <h3 className="h3">Adventurers seeking parties</h3>
+                      {SEED_ROSTER.filter(
+                        (s) => !player.party.members.includes(s.id),
+                      ).map((s) => (
+                        <div key={s.id} className="quest-row">
+                          <span
+                            className="qr-rank"
+                            style={{
+                              background: RANK_COLORS[s.rank],
+                            }}
+                          >
+                            {s.rank}
+                          </span>
+                          <div className="qr-main">
+                            <div className="qr-title">{s.name}</div>
+                            <div className="qr-sub">
+                              {s.cls} · {s.note}
+                            </div>
+                          </div>
+                          <button
+                            className="btn tiny"
+                            onClick={() => recruitToParty(s)}
+                          >
+                            Invite
+                          </button>
+                        </div>
+                      ))}
+                      {SEED_ROSTER.filter((s) =>
+                        player.party.members.includes(s.id),
+                      ).map((s) => (
+                        <div key={s.id} className="quest-row inparty">
+                          <span
+                            className="qr-rank"
+                            style={{
+                              background: RANK_COLORS[s.rank],
+                            }}
+                          >
+                            {s.rank}
+                          </span>
+                          <div className="qr-main">
+                            <div className="qr-title">{s.name}</div>
+                            <div className="qr-sub">In your party ✓</div>
+                          </div>
+                        </div>
+                      ))}
+                    </React.Fragment>
+                  ) : (
+                    <button className="btn gold" onClick={formParty}>
+                      Form a party
+                    </button>
+                  )}
+                </section>
+              )}
+              {tab === "sheet" && (
+                <section>
+                  <div className="profile-head">
+                    <div className="ava-wrap">
+                      {player.avatar ? (
+                        <img
+                          className="ava"
+                          src={player.avatar}
+                          alt="Your portrait"
+                        />
+                      ) : (
+                        <div className="ava ava-empty">✦</div>
+                      )}
+                      <label className="ava-edit" title="Change portrait">
+                        Change
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleAvatarUpload}
+                          style={{
+                            display: "none",
+                          }}
+                        />
+                      </label>
+                    </div>
+                    <div className="profile-id">
+                      <h2
+                        className="h2"
+                        style={{
+                          margin: 0,
+                        }}
+                      >
+                        {player.name}
+                      </h2>
+                      <div className="qr-sub">
+                        Adventurer of the {player.profile.city}
+                      </div>
+                    </div>
+                    <button
+                      className={"gear " + (settingsOpen ? "on" : "")}
+                      onClick={() => setSettingsOpen(!settingsOpen)}
+                      title="Account settings"
+                      aria-label="Account settings"
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.7"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <circle cx="12" cy="12" r="3.2" />
+                        <path d="M12 2.8 l1.2 2.6 2.8 .5 2 -2 1.1 1.1 -2 2 .5 2.8 2.6 1.2 -2.6 1.2 -.5 2.8 2 2 -1.1 1.1 -2 -2 -2.8 .5 -1.2 2.6 -1.2 -2.6 -2.8 -.5 -2 2 -1.1 -1.1 2 -2 -.5 -2.8 -2.6 -1.2 2.6 -1.2 .5 -2.8 -2 -2 1.1 -1.1 2 2 2.8 -.5 z" />
+                      </svg>
+                    </button>
+                  </div>
+                  {settingsOpen && (
+                    <div className="panel settings">
+                      <h3
+                        className="h3"
+                        style={{
+                          marginTop: 0,
+                        }}
+                      >
+                        Personal details
+                      </h3>
+                      <div className="set-grid">
+                        <label>
+                          Adventurer name
+                          <input
+                            className="field"
+                            value={player.name}
+                            onChange={(s) =>
+                              setPlayer((S) => ({
+                                ...S,
+                                name: s.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                        <label>
+                          Email
+                          <input
+                            className="field"
+                            value={player.profile.email}
+                            onChange={(s) =>
+                              setPlayer((S) => ({
+                                ...S,
+                                profile: {
+                                  ...S.profile,
+                                  email: s.target.value,
+                                },
+                              }))
+                            }
+                            placeholder="you@realm.com"
+                          />
+                        </label>
+                        <label>
+                          Phone
+                          <input
+                            className="field"
+                            value={player.profile.phone}
+                            onChange={(s) =>
+                              setPlayer((S) => ({
+                                ...S,
+                                profile: {
+                                  ...S.profile,
+                                  phone: s.target.value,
+                                },
+                              }))
+                            }
+                            placeholder="+1 555 0100"
+                          />
+                        </label>
+                      </div>
+                      <h3 className="h3">Payment & tax</h3>
+                      <p
+                        className="fine"
+                        style={{
+                          marginTop: 0,
+                        }}
+                      >
+                        Prototype only — do not enter real bank, card, or tax
+                        details here. In production this connects to a secure
+                        payment processor and identity vault.
+                      </p>
+                      <div className="set-grid">
+                        <label>
+                          Payout preference
+                          <select
+                            className="field"
+                            value={player.profile.payout}
+                            onChange={(s) =>
+                              setPlayer((S) => ({
+                                ...S,
+                                profile: {
+                                  ...S.profile,
+                                  payout: s.target.value,
+                                },
+                              }))
+                            }
+                          >
+                            <option>Guild scrip</option>
+                            <option>Bank transfer (demo)</option>
+                            <option>Barter only</option>
+                          </select>
+                        </label>
+                        <label>
+                          Tax ID (demo)
+                          <input
+                            className="field"
+                            value={player.profile.taxId}
+                            onChange={(s) =>
+                              setPlayer((S) => ({
+                                ...S,
+                                profile: {
+                                  ...S.profile,
+                                  taxId: s.target.value,
+                                },
+                              }))
+                            }
+                            placeholder="XX-XXXXXXX"
+                          />
+                        </label>
+                      </div>
+                      <h3 className="h3">Preferences</h3>
+                      <div className="set-grid">
+                        <label>
+                          Chapter theme
+                          <select
+                            className="field"
+                            value={player.profile.city}
+                            onChange={(s) =>
+                              setPlayer((S) => ({
+                                ...S,
+                                profile: {
+                                  ...S.profile,
+                                  city: s.target.value,
+                                },
+                              }))
+                            }
+                          >
+                            <option>High Fantasy Chapter</option>
+                            <option disabled={true}>
+                              Neo-Kyoto (cyberpunk) — coming soon
+                            </option>
+                            <option disabled={true}>
+                              The Athenaeum (Victorian) — coming soon
+                            </option>
+                            <option disabled={true}>
+                              The Speakeasy (roaring '20s) — coming soon
+                            </option>
+                          </select>
+                        </label>
+                        <label
+                          className="check-row"
+                          style={{
+                            margin: "20px 0 0",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={player.profile.notify}
+                            onChange={(s) =>
+                              setPlayer((S) => ({
+                                ...S,
+                                profile: {
+                                  ...S.profile,
+                                  notify: s.target.checked,
+                                },
+                              }))
+                            }
+                          />
+                          <span>
+                            Ravens (notifications) about new postings & seals
+                          </span>
+                        </label>
+                        <label
+                          className="check-row"
+                          style={{
+                            margin: "8px 0 0",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!!player.profile.isSteward}
+                            onChange={(s) =>
+                              setPlayer((S) => ({
+                                ...S,
+                                profile: {
+                                  ...S.profile,
+                                  isSteward: s.target.checked,
+                                },
+                              }))
+                            }
+                          />
+                          <span>
+                            Steward tools (prototype-only: approve postings &
+                            resolve disputes in the Guildhall)
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                  <h2 className="h2">Character Sheet</h2>
+                  <div className="panel sheet-head">
+                    <div
+                      className="rank-seal"
+                      style={{
+                        borderColor: RANK_COLORS[player.rank],
+                        color: RANK_COLORS[player.rank],
+                      }}
+                    >
+                      {player.rank}
+                    </div>
+                    <div>
+                      <div
+                        className="qr-title"
+                        style={{
+                          fontSize: 18,
+                        }}
+                      >
+                        {player.name}
+                      </div>
+                      <div className="qr-sub">
+                        Level {currentLevel} Adventurer ·{" "}
+                        {player.completed.length} deeds done
+                      </div>
+                      <div className="xpbar">
+                        <div
+                          className="xpfill"
+                          style={{
+                            width: `${Math.round(((player.xp - xpForLevel(currentLevel)) / (xpForLevel(currentLevel + 1) - xpForLevel(currentLevel))) * 100)}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="qr-sub">
+                        {player.xp - xpForLevel(currentLevel)}/
+                        {xpForLevel(currentLevel + 1) -
+                          xpForLevel(currentLevel)}{" "}
+                        XP to Level {currentLevel + 1} · {player.xp} total XP
+                      </div>
+                    </div>
+                  </div>
+                  {nextRank && (
+                    <div className="panel">
+                      <b>
+                        Rank Trial — {player.rank} → {nextRank}
+                      </b>
+                      <div
+                        className="qr-sub"
+                        style={{
+                          margin: "4px 0 8px",
+                        }}
+                      >
+                        Requires {RANK_XP_THRESHOLD[nextRank]} total XP — each
+                        rank demands far more than the last.{" "}
+                        {canAttemptTrial
+                          ? "You are ready."
+                          : `${RANK_XP_THRESHOLD[nextRank] - player.xp} XP remains.`}
+                      </div>
+                      <button
+                        className="btn tiny gold"
+                        disabled={!canAttemptTrial}
+                        onClick={attemptRankTrial}
+                      >
+                        Undertake the trial
+                      </button>
+                    </div>
+                  )}
+                  <h3 className="h3">Attributes — Select</h3>
+                  <p className="qr-sub">
+                    Deeds shape you. Attributes grow without limit; their frames
+                    ascend from Novice to Legendary as they climb.
+                  </p>
+                  <div className="mvc-wrap">
+                    <div className="mvc-grid">
+                      {STAT_KEYS.map((s) => {
+                        let [, , S] = tierForStat(player.stats[s]);
+                        return (
+                          <button
+                            key={s}
+                            className={
+                              "mvc-tile " + (sheetStatTab === s ? "sel" : "")
+                            }
+                            style={{
+                              "--tc": S,
+                            }}
+                            onClick={() => setSheetStatTab(s)}
+                          >
+                            <span className="mvc-ico">
+                              <StatIcon s={s} />
+                            </span>
+                            <span className="mvc-abbr">{s}</span>
+                            <span className="mvc-val">{player.stats[s]}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div
+                      className="mvc-detail"
+                      style={{
+                        "--tc": tierForStat(player.stats[sheetStatTab])[2],
+                      }}
+                    >
+                      <div className="mvc-big">
+                        {player.stats[sheetStatTab]}
+                      </div>
+                      <div className="mvc-dname">
+                        <span className="mvc-dico">
+                          <StatIcon s={sheetStatTab} />
+                        </span>
+                        {STAT_NAMES[sheetStatTab]}
+                      </div>
+                      <div className="mvc-tier">
+                        {tierForStat(player.stats[sheetStatTab])[1]} frame
+                      </div>
+                      <p className="mvc-lore">
+                        {STAT_DESCRIPTIONS[sheetStatTab]}
+                      </p>
+                    </div>
+                  </div>
+                  <h3 className="h3">Achievements</h3>
+                  <div className="ach-grid">
+                    {ACHIEVEMENTS.map((s) => (
+                      <div
+                        key={s.id}
+                        className={
+                          "ach " +
+                          (player.achievements.includes(s.id) ? "got" : "")
+                        }
+                      >
+                        <span className="ach-ico">{s.icon}</span>
+                        <div>
+                          <b>{s.name}</b>
+                          <div className="qr-sub">{s.desc}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    className="btn ghost"
+                    style={{
+                      marginTop: 20,
+                    }}
+                    onClick={signOut}
+                  >
+                    Leave the guild (reset demo)
+                  </button>
+                </section>
+              )}
+              {tab === "tavern" && (
+                <section>
+                  <h2 className="h2">The Tavern</h2>
+                  {rankIndex < 1 ? (
+                    <div className="panel locked-panel">
+                      <div className="big-lock">🚪</div>
+                      <b>The doors are barred to Rank F.</b>
+                      <p
+                        className="qr-sub"
+                        style={{
+                          marginTop: 6,
+                        }}
+                      >
+                        Prove yourself with F-rank quests and pass your trial
+                        into Rank E. Then the hearth, the hall, and the higher
+                        contracts await.
+                      </p>
+                    </div>
+                  ) : (
+                    <React.Fragment>
+                      <div className="panel">
+                        <b>
+                          {player.atTavern
+                            ? "You are inside the Tavern."
+                            : "You are away from the Tavern."}
+                        </b>
+                        <p
+                          className="qr-sub"
+                          style={{
+                            margin: "4px 0 10px",
+                          }}
+                        >
+                          Rank B and above contracts can only be accepted within
+                          these walls.
+                        </p>
+                        <button
+                          className="btn tiny gold"
+                          onClick={() =>
+                            setPlayer((s) => ({
+                              ...s,
+                              atTavern: !s.atTavern,
+                            }))
+                          }
+                        >
+                          {player.atTavern
+                            ? "Check out"
+                            : "Check in (demo: geolocated at door)"}
+                        </button>
+                      </div>
+                      <div className="panel">
+                        <b>Guild Membership</b>
+                        <ul className="perk-list">
+                          <li>✓ Job insurance for all sanctioned quests</li>
+                          <li>
+                            {rankIndex >= 2 ? "\u2713" : "\u2717"} Club entry
+                            after dark (Rank D and above)
+                          </li>
+                          <li>✓ Access to the barter board & seasonal buffs</li>
+                        </ul>
+                      </div>
+                      <h3 className="h3">Buffs & Boons — redeem at the bar</h3>
+                      {BUFFS.map((s) => (
+                        <div key={s.id} className="quest-row">
+                          <span className="ach-ico">{s.icon}</span>
+                          <div className="qr-main">
+                            <div className="qr-title">{s.name}</div>
+                            <div className="qr-sub">{s.desc}</div>
+                          </div>
+                          <button
+                            className="btn tiny"
+                            disabled={!player.atTavern}
+                            onClick={() =>
+                              showToast(
+                                `Redeemed: ${s.redeem}. Show this to the barkeep.`,
+                              )
+                            }
+                          >
+                            Redeem
+                          </button>
+                        </div>
+                      ))}
+                      <p className="fine">
+                        Other chapters coming: Neo-Kyoto (cyberpunk), The
+                        Athenaeum (Victorian), The Speakeasy (roaring '20s) —
+                        each city, its own tavern and theme.
+                      </p>
+                    </React.Fragment>
+                  )}
+                </section>
+              )}
+              {tab === "hall" && (
+                <section>
+                  <h2 className="h2">The Guildhall</h2>
+                  {player.profile.isSteward && (
+                    <div className="bucket steward-ledger">
+                      <h3 className="h3">Steward's Ledger</h3>
+                      <p className="qr-sub">
+                        Visible only to stewards. Review new postings before
+                        they reach the public board, and resolve disputed
+                        deeds.
+                      </p>
+                      <h4 className="h4">
+                        Pending postings —{" "}
+                        {player.myPostings.filter((s) => s.status === "pendingReview").length}
+                      </h4>
+                      {player.myPostings.filter((s) => s.status === "pendingReview").length === 0 && (
+                        <p className="empty">Nothing awaiting review.</p>
+                      )}
+                      {player.myPostings
+                        .filter((s) => s.status === "pendingReview")
+                        .map((s) => (
+                          <div key={s.id} className="quest-row">
+                            <span
+                              className="qr-rank"
+                              style={{ background: RANK_COLORS[s.rank] }}
+                            >
+                              {s.rank}
+                            </span>
+                            <div className="qr-main">
+                              <div className="qr-title">{s.title}</div>
+                              <div className="qr-sub">
+                                {s.employer} ·{" "}
+                                {s.barter ? `Barter: ${s.barterFor}` : `${s.scrip} scrip`}
+                              </div>
+                            </div>
+                            <div className="pet-actions">
+                              <button
+                                className="btn tiny gold"
+                                onClick={() => approvePosting(s)}
+                              >
+                                Approve
+                              </button>
+                              <button
+                                className="btn tiny ghost"
+                                onClick={() => rejectPosting(s)}
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      <h4 className="h4">
+                        Disputed deeds —{" "}
+                        {player.myPostings.filter((s) => s.disputed).length +
+                          (player.disputes || []).length}
+                      </h4>
+                      {player.myPostings.filter((s) => s.disputed).length +
+                        (player.disputes || []).length === 0 && (
+                        <p className="empty">No open disputes.</p>
+                      )}
+                      {player.myPostings
+                        .filter((s) => s.disputed)
+                        .map((s) => (
+                          <div key={s.id} className="quest-row">
+                            <div className="qr-main">
+                              <div className="qr-title">{s.title}</div>
+                              <div className="qr-sub">
+                                You rated {s.taker && s.taker.name}{" "}
+                                {"★".repeat(s.myRating)} as employer
+                              </div>
+                            </div>
+                            <button
+                              className="btn tiny"
+                              onClick={() => resolvePostingDispute(s)}
+                            >
+                              Mark resolved
+                            </button>
+                          </div>
+                        ))}
+                      {(player.disputes || []).map((d) => (
+                        <div key={d.id} className="quest-row">
+                          <div className="qr-main">
+                            <div className="qr-title">{d.title}</div>
+                            <div className="qr-sub">
+                              You rated {d.employer} {"★".repeat(d.rating)} as
+                              their taker
+                            </div>
+                          </div>
+                          <button
+                            className="btn tiny"
+                            onClick={() => resolveTakerDispute(d)}
+                          >
+                            Mark resolved
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <h3 className="h3">Notice Board (forum)</h3>
+                  {forumPosts.map((s) => (
+                    <div key={s.id} className="quest-row">
+                      <div className="qr-main">
+                        <div className="qr-title">{s.title}</div>
+                        <div className="qr-sub">
+                          {s.tag} · {s.author} · {s.replies} replies
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="composer">
+                    <input
+                      className="field"
+                      placeholder={"Pin a new notice\u2026"}
+                      value={noticeDraft}
+                      onChange={(s) => setNoticeDraft(s.target.value)}
+                    />
+                    <button
+                      className="btn tiny"
+                      disabled={!noticeDraft.trim()}
+                      onClick={() => {
+                        (setForumPosts([
+                          {
+                            id: "f" + Date.now(),
+                            title: noticeDraft,
+                            author: player.name,
+                            replies: 0,
+                            tag: "General",
+                          },
+                          ...forumPosts,
+                        ]),
+                          setNoticeDraft(""));
+                      }}
+                    >
+                      Pin
+                    </button>
+                  </div>
+                  <h3 className="h3">Ravens (messages)</h3>
+                  {activeThreadId ? (
+                    <div className="panel">
+                      <button
+                        className="btn tiny ghost"
+                        onClick={() => setActiveThreadId(null)}
+                      >
+                        ← All ravens
+                      </button>
+                      {dmThreads
+                        .find((s) => s.id === activeThreadId)
+                        .msgs.map((s, S) => (
+                          <div
+                            key={S}
+                            className={"bubble " + (s.me ? "me" : "")}
+                          >
+                            {s.t}
+                          </div>
+                        ))}
+                      <div className="composer">
+                        <input
+                          className="field"
+                          placeholder={"Write a message\u2026"}
+                          value={messageDraft}
+                          onChange={(s) => setMessageDraft(s.target.value)}
+                        />
+                        <button
+                          className="btn tiny"
+                          disabled={!messageDraft.trim()}
+                          onClick={() => {
+                            (setDmThreads(
+                              dmThreads.map((s) =>
+                                s.id === activeThreadId
+                                  ? {
+                                      ...s,
+                                      msgs: [
+                                        ...s.msgs,
+                                        {
+                                          me: true,
+                                          t: messageDraft,
+                                        },
+                                      ],
+                                    }
+                                  : s,
+                              ),
+                            ),
+                              setMessageDraft(""));
+                          }}
+                        >
+                          Send
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    dmThreads.map((s) => (
+                      <div
+                        key={s.id}
+                        className="quest-row"
+                        style={{
+                          cursor: "pointer",
+                        }}
+                        onClick={() => setActiveThreadId(s.id)}
+                      >
+                        <div className="qr-main">
+                          <div className="qr-title">{s.withWhom}</div>
+                          <div className="qr-sub">
+                            {s.msgs[s.msgs.length - 1].t.slice(0, 60)}…
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                  <h3 className="h3">
+                    Petition the Guild Council (contact admin)
+                  </h3>
+                  <div className="composer">
+                    <input
+                      className="field"
+                      placeholder={"Report an issue, dispute a quest, request support\u2026"}
+                      value={petitionDraft}
+                      onChange={(s) => setPetitionDraft(s.target.value)}
+                    />
+                    <button
+                      className="btn tiny"
+                      disabled={!petitionDraft.trim()}
+                      onClick={() => {
+                        (setPetitionDraft(""),
+                          showToast(
+                            "Petition delivered to the Council. Expect a raven within 2 days.",
+                          ));
+                      }}
+                    >
+                      Send
+                    </button>
+                  </div>
+                </section>
+              )}
+            </main>
+            <nav className="tabs">
+              {[
+                ["boards", "Boards"],
+                ["quests", "Quests"],
+                ["party", "Party"],
+                ["tavern", "Tavern"],
+                ["hall", "Hall"],
+              ].map(([s, S]) => (
+                <button
+                  key={s}
+                  className={"tab " + (tab === s ? "on" : "")}
+                  onClick={() => setTab(s)}
+                >
+                  <NavIcon k={s} />
+                  <span>{S}</span>
+                </button>
+              ))}
+            </nav>
+          </React.Fragment>
+        )}
+        {openQuest && (
+          <div className="overlay" onClick={() => setOpenQuest(null)}>
+            <div className="modal" onClick={(s) => s.stopPropagation()}>
+              <div
+                className="modal-rank"
+                style={{
+                  color: RANK_COLORS[openQuest.rank],
+                }}
+              >
+                RANK {openQuest.rank} · {openQuest.type.toUpperCase()}
+              </div>
+              <h3 className="modal-title">{openQuest.title}</h3>
+              <p className="modal-desc">{openQuest.desc}</p>
+              <div className="modal-meta">
+                <div>
+                  <b>Employer</b> {openQuest.employer}
+                </div>
+                <div>
+                  <b>Reward</b>{" "}
+                  {openQuest.barter
+                    ? `Barter \u2014 ${openQuest.barterFor}`
+                    : `${openQuest.scrip} scrip`}
+                </div>
+                <div>
+                  <b>Grants</b> +{XP_PER_RANK[openQuest.rank]} XP ·{" "}
+                  {Object.entries(openQuest.stats)
+                    .map(([s, S]) => `+${S} ${s}`)
+                    .join(" \xB7 ")}
+                </div>
+                {openQuest.tavernOnly && (
+                  <div className="warn">⚑ Accepted only inside the Tavern</div>
+                )}
+                {openQuest.partyAdvised && (
+                  <div className="warn">⚑ Party strongly advised</div>
+                )}
+              </div>
+              <div className="modal-actions">
+                {openQuest.mine ? (
+                  <button className="btn ghost" disabled={true}>
+                    Your posting — awaiting takers
+                  </button>
+                ) : (
+                  <React.Fragment>
+                    {!player.saved.includes(openQuest.id) && (
+                      <button
+                        className="btn ghost"
+                        onClick={() => {
+                          saveToSatchel(openQuest);
+                        }}
+                      >
+                        Save card
+                      </button>
+                    )}
+                    <button
+                      className="btn gold"
+                      onClick={() => petitionForQuest(openQuest)}
+                    >
+                      Petition to take
+                    </button>
+                  </React.Fragment>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+        {draftPosting && (
+          <div className="overlay" onClick={() => setDraftPosting(null)}>
+            <div className="modal" onClick={(s) => s.stopPropagation()}>
+              <div
+                className="modal-rank"
+                style={{
+                  color: RANK_COLORS[draftPosting.rank],
+                }}
+              >
+                NEW CONTRACT · RANK {draftPosting.rank}
+              </div>
+              <h3 className="modal-title">Post to the boards</h3>
+              <input
+                className="field wood-field"
+                placeholder={"Title \u2014 e.g. The Leaning Bookshelf"}
+                value={draftPosting.title}
+                onChange={(s) =>
+                  setDraftPosting({
+                    ...draftPosting,
+                    title: s.target.value,
+                  })
+                }
+              />
+              <input
+                className="field wood-field"
+                placeholder={"Describe the deed to be done\u2026"}
+                value={draftPosting.desc}
+                onChange={(s) =>
+                  setDraftPosting({
+                    ...draftPosting,
+                    desc: s.target.value,
+                  })
+                }
+              />
+              <div className="form-row">
+                <span className="form-label">Rank</span>
+                <div className="pick-row">
+                  {RANKS.map((s) => (
+                    <button
+                      key={s}
+                      className={
+                        "chip " + (draftPosting.rank === s ? "on" : "")
+                      }
+                      style={{
+                        color: RANK_COLORS[s],
+                        borderColor:
+                          draftPosting.rank === s ? RANK_COLORS[s] : "#8a7a5e",
+                      }}
+                      onClick={() =>
+                        setDraftPosting({
+                          ...draftPosting,
+                          rank: s,
+                          stats: draftPosting.stats.slice(
+                            0,
+                            statRewardForRank(s).cap,
+                          ),
+                        })
+                      }
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="form-row">
+                <span className="form-label">Nature of the deed</span>
+                <div className="pick-row">
+                  {[
+                    "Search",
+                    "Labor",
+                    "Social",
+                    "Craft",
+                    "Scholarly",
+                    "Adventure",
+                    "Grand",
+                  ].map((s) => (
+                    <button
+                      key={s}
+                      className={
+                        "chip " + (draftPosting.type === s ? "on" : "")
+                      }
+                      style={{
+                        color: "#3A1408",
+                        borderColor:
+                          draftPosting.type === s
+                            ? "#571E0C"
+                            : "rgba(30,17,5,.4)",
+                      }}
+                      onClick={() =>
+                        setDraftPosting({
+                          ...draftPosting,
+                          type: s,
+                        })
+                      }
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="form-row">
+                <span className="form-label">
+                  Trains ({draftPosting.stats.length}/
+                  {statRewardForRank(draftPosting.rank).cap} ·{" "}
+                  {statRewardForRank(draftPosting.rank).pts} pts total)
+                </span>
+                <div className="pick-row">
+                  {STAT_KEYS.map((s) => {
+                    let S = draftPosting.stats.includes(s),
+                      N =
+                        !S &&
+                        draftPosting.stats.length >=
+                          statRewardForRank(draftPosting.rank).cap;
+                    return (
+                      <button
+                        key={s}
+                        className={"stat-pick " + (S ? "on" : "")}
+                        disabled={N}
+                        onClick={() =>
+                          setDraftPosting({
+                            ...draftPosting,
+                            stats: S
+                              ? draftPosting.stats.filter((U) => U !== s)
+                              : [...draftPosting.stats, s],
+                          })
+                        }
+                      >
+                        <StatIcon s={s} />
+                        {s}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="form-row">
+                <span className="form-label">Payment</span>
+                <div className="pick-row">
+                  <button
+                    className={"chip " + (draftPosting.barter ? "" : "on")}
+                    onClick={() =>
+                      setDraftPosting({
+                        ...draftPosting,
+                        barter: false,
+                      })
+                    }
+                  >
+                    Scrip
+                  </button>
+                  <button
+                    className={"chip " + (draftPosting.barter ? "on" : "")}
+                    onClick={() =>
+                      setDraftPosting({
+                        ...draftPosting,
+                        barter: true,
+                      })
+                    }
+                  >
+                    Barter
+                  </button>
+                </div>
+              </div>
+              {draftPosting.barter ? (
+                <input
+                  className="field wood-field"
+                  placeholder="What do you offer in trade?"
+                  value={draftPosting.barterFor}
+                  onChange={(s) =>
+                    setDraftPosting({
+                      ...draftPosting,
+                      barterFor: s.target.value,
+                    })
+                  }
+                />
+              ) : (
+                <input
+                  className="field wood-field"
+                  type="number"
+                  min="0"
+                  placeholder="Scrip offered"
+                  value={draftPosting.scrip}
+                  onChange={(s) =>
+                    setDraftPosting({
+                      ...draftPosting,
+                      scrip: s.target.value,
+                    })
+                  }
+                />
+              )}
+              {RANKS.indexOf(draftPosting.rank) >= 4 && (
+                <div
+                  className="warn"
+                  style={{
+                    fontSize: 13,
+                    marginTop: 8,
+                  }}
+                >
+                  ⚑ Rank B+ contracts are only offered inside the Tavern.
+                </div>
+              )}
+              <div className="modal-actions">
+                <button
+                  className="btn ghost"
+                  onClick={() => setDraftPosting(null)}
+                >
+                  Discard
+                </button>
+                <button
+                  className="btn gold"
+                  disabled={
+                    !draftPosting.title.trim() ||
+                    !draftPosting.desc.trim() ||
+                    draftPosting.stats.length === 0 ||
+                    (draftPosting.barter && !draftPosting.barterFor.trim())
+                  }
+                  onClick={submitPosting}
+                >
+                  Pin to the board
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {ratingTarget && (
+          <div className="overlay">
+            <div className="modal">
+              <h3 className="modal-title">Rate your employer</h3>
+              <p className="modal-desc">
+                {ratingTarget.employer} — “{ratingTarget.title}”. They will rate
+                you as well; your standing shapes the contracts offered to you.
+              </p>
+              <div className="stars">
+                {[1, 2, 3, 4, 5].map((s) => (
+                  <button
+                    key={s}
+                    className="star"
+                    onClick={() => completeQuestAndRate(ratingTarget, s)}
+                  >
+                    ★
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+export default App;
