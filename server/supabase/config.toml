@@ -1,0 +1,13 @@
+# Supabase CLI config. Run `supabase link --project-ref <your-project-ref>`
+# after creating the project, then `supabase db push` to apply
+# migrations/ — or paste each migration file into the Supabase Dashboard's
+# SQL Editor in order (0001, 0002, 0003) if you don't want the CLI.
+project_id = "the-guild-masters"
+
+[auth]
+enabled = true
+
+[auth.external.google]
+enabled = true
+# client_id / secret are configured in the Supabase Dashboard
+# (Authentication -> Providers -> Google), not here.

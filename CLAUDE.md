@@ -223,54 +223,82 @@ done. This list is what's actually left before real (non-prototype) users can
 use this, ranked by dependency order — earlier tiers block later ones.
 
 **Tier 1 — Blocking foundation (nothing else works for real users without these)**
-1. **Real backend + multi-user database.** The entire app today is
-   single-player/localStorage with simulated NPCs (seed petitioners, seed
-   steward queue, etc.). Every item below assumes real accounts and shared
-   state that doesn't exist yet.
-2. **Admin console / control panel.** A separate control surface (not just
-   the in-app Steward's Ledger) to run every operational aspect of the
-   platform: user account management (verify, suspend, support rank
-   overrides), global moderation oversight (all postings/disputes/steward
-   actions across all users, not just one player's own), Tavern partner-venue
-   roster management (see Tier 3), payments/scrip oversight, ID-verification
-   review queue, and an analytics dashboard for the north-star and
-   phase-gate metrics already defined in "Product roadmap" above. In-fiction,
-   this is where a real human plays "the Guild Council" — right now that's
-   just an NPC label on auto-resolved actions.
-3. **Real authentication** — Google OAuth + email/phone, replacing the
-   stubbed landing-screen auth, tied to the real backend above.
-4. **Real ID verification integration** (e.g. Stripe Identity, Persona,
-   Onfido) — replaces the "mock ID verification, mark as verified" button.
+1. **Real backend + multi-user database — SCAFFOLDED, needs manual setup.**
+   Schema (`server/supabase/migrations/`) covers profiles, chapters, venues
+   + venue_history, postings, disputes, steward_log, id_verifications,
+   payment_accounts, transactions, with RLS + SECURITY DEFINER RPCs
+   enforcing the same governance rules as the client (no self-review, rank
+   ceiling, admin-only venue changes). **Not yet done:** the existing
+   quest/board/party gameplay in `App.jsx` still runs entirely on
+   `localStorage` — only the Admin Console (venues, roles, ID verification)
+   actually reads/writes Supabase so far. Migrating the core game loop is
+   its own follow-on task. See `server/README.md` for setup (create the
+   Supabase project, run the migrations — none of this happens
+   automatically, a human has to do it).
+2. **Admin console / control panel — BUILT** (`app/src/components/AdminConsole.jsx`,
+   reachable from Settings → "Open Admin Console" when `profiles.is_admin`
+   is true — a rank-independent flag, only ever changed via `admin_set_role`).
+   Functional: Venue Management (add partner venues, switch the chapter's
+   one active venue, backed by `admin_set_active_venue`/`admin_create_venue`),
+   ID-verification review queue (approve/reject uploaded documents).
+   Still stubbed/"coming soon": user account search & suspension, global
+   cross-chapter moderation view, payments oversight dashboard — analytics
+   dashboard for the north-star/phase-gate metrics not started.
+3. **Real authentication — BUILT** (Google OAuth via Supabase Auth,
+   `app/src/auth/SupabaseAuthContext.jsx`). Gates the app in front of the
+   existing mock landing flow; if `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY`
+   are unset, it steps aside entirely and the original email/phone/OTP mock
+   flow still runs untouched (so the currently-deployed static site isn't
+   broken until Supabase is actually configured). Email/phone login as an
+   alternative to Google was not built — Google-only for now.
+4. **Real ID verification — PARTIALLY BUILT, manual review only.** Player
+   uploads a document (private Supabase Storage bucket) during onboarding;
+   admin approves/rejects from the Admin Console. No third-party
+   verification vendor (Stripe Identity/Persona/Onfido) integrated —
+   deferred, needs a vendor choice + legal review first.
 
 **Tier 2 — Trust & economy infrastructure (before money or liability is real)**
-5. **Payments integration** (Stripe Connect or equivalent) for scrip
-   payout/escrow, plus 1099 tax reporting. Gig-economy labor classification
-   already flagged elsewhere in this doc as needing legal review before this
-   ships.
+5. **Payments integration — PARTIALLY SCAFFOLDED.** Chose Stripe (Connect
+   Express, for marketplace-style payouts) — Square was the other real
+   option with a usable sandbox; Venmo has no viable public marketplace/
+   payout API, ruled out. Edge Functions exist
+   (`server/supabase/functions/stripe-connect-onboarding`,
+   `.../stripe-webhook`) for account onboarding and payment/account webhook
+   events, writing to `payment_accounts`/`transactions`. **Not yet done:**
+   no checkout/escrow flow ties an actual quest completion to a real
+   charge yet — that depends on the core game loop migrating off
+   `localStorage` first (see item 1). 1099 tax reporting not started.
+   Gig-economy labor classification already flagged elsewhere in this doc
+   as needing legal review before this ships for real.
 6. **Insurance partner integration** for the D+ "guild-covered insurance"
    promise — currently just UI copy with nothing behind it.
-7. **Server-side enforcement of steward permissions.** The rank-ceiling /
-   no-self-review governance logic (`canStewardApprove` in `App.jsx`) is
-   correct but client-side only; once other real accounts exist it must be
-   enforced server-side via the Admin Console's role system, not trusted
-   from the client.
+7. **Server-side enforcement of steward permissions — SCAFFOLDED.** The
+   `review_posting`/`resolve_dispute` Postgres RPCs (`0002_functions_rls.sql`)
+   re-implement the same rank-ceiling + no-self-review rules as
+   `canStewardApprove` in `App.jsx`, enforced server-side via SECURITY
+   DEFINER functions — a client can't bypass them by skipping the UI gate.
+   One correction worth noting: real disputes involve two distinct users,
+   so a steward can genuinely recuse only when they're a party to that
+   specific dispute (`raised_by`/`against`), rather than every dispute
+   always being Council-only as in the single-player prototype. **Not yet
+   done:** the existing `App.jsx` game loop doesn't call these RPCs yet —
+   it still uses its own local `canStewardApprove`/`refreshBoard` logic
+   against `localStorage` data (see item 1).
 
 **Tier 3 — Engagement & the Tavern partner network**
-8. **Multi-venue partner network for "The Tavern."** Since there's no fixed
-   physical location at launch, "The Tavern" becomes a rotating roster of
-   partner bars/breweries. Each partner venue needs: name/address, real
-   coordinates + geofence radius for check-in, an active rotation window,
-   and per-venue perks/promo terms — this is also the mechanism for
-   promotional partnerships (sponsors get check-in/redemption analytics).
-   **Rotation model (decided 2026-07-25):** exactly **one active venue per
-   guild chapter** at a time — not a player-facing list/map. A chapter's
-   venue can only be changed by the Guild Council (i.e. only via the Admin
-   Console, item 2 — no player- or steward-level control over this,
-   regardless of rank). Launch starts with one chapter, so one venue overall;
-   the data model still needs to be chapter-scoped (`chapter -> activeVenue`)
-   since multi-city chapters (Tier 5) will each rotate independently. This
-   also changes the "Tavern beta" phase metric from one door's conversion
-   rate to per-chapter (currently = one door) conversion.
+8. **Multi-venue partner network for "The Tavern" — BACKEND BUILT, not yet
+   wired into the game's Tavern screen.** `venues`/`chapters`/`venue_history`
+   tables + `admin_create_venue`/`admin_set_active_venue` RPCs implement
+   the decided model: exactly **one active venue per guild chapter** at a
+   time, changeable only via the Admin Console (never a player or steward,
+   regardless of rank) — see Venue Management in `AdminConsole.jsx`. Each
+   venue has name/address/coordinates/geofence radius/promo terms.
+   **Not yet done:** the in-game Tavern tab (`App.jsx`) still shows the old
+   generic "The Tavern" with a manual check-in toggle — it doesn't read the
+   chapter's real active venue or do real geofencing yet, and there's no
+   partner-facing reporting (check-ins/redemptions) for selling/renewing
+   sponsorships. This also changes the "Tavern beta" phase metric from one
+   door's conversion rate to per-chapter (currently = one door) conversion.
 9. **Push notifications** (web push / FCM / APNs) replacing the in-app-only
    inbox — flagged as the strongest re-engagement hook.
 10. **Real ratings/reviews** replacing simulated NPC petitioners, once real

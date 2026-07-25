@@ -22,8 +22,11 @@ import {
 } from "./constants.js";
 import { Logo, StatIcon, NavIcon, BellIcon } from "./icons.jsx";
 import { QuestCard } from "./components/QuestCard.jsx";
+import { AdminConsole } from "./components/AdminConsole.jsx";
+import { useSupabaseAuth } from "./auth/SupabaseAuthContext.jsx";
   function App() {
-    let [authScreen, setAuthScreen] = useState("landing"),
+    let supabaseAuth = useSupabaseAuth(),
+      [authScreen, setAuthScreen] = useState("landing"),
       [tab, setTab] = useState("boards"),
       [player, setPlayer] = useState(INITIAL_PLAYER),
       [hasLoaded, setHasLoaded] = useState(false),
@@ -1411,6 +1414,15 @@ import { QuestCard } from "./components/QuestCard.jsx";
                               ` — requires Rank ${RANKS[4]} or higher`}
                           </span>
                         </label>
+                        {supabaseAuth?.profile?.is_admin && (
+                          <button
+                            className="btn gold"
+                            style={{ marginTop: "12px" }}
+                            onClick={() => setTab("admin")}
+                          >
+                            Open Admin Console
+                          </button>
+                        )}
                       </div>
                     </div>
                   )}
@@ -1926,6 +1938,9 @@ import { QuestCard } from "./components/QuestCard.jsx";
                     </button>
                   </div>
                 </section>
+              )}
+              {tab === "admin" && supabaseAuth?.profile?.is_admin && (
+                <AdminConsole profile={supabaseAuth.profile} onBack={() => setTab("sheet")} />
               )}
             </main>
             <nav className="tabs">
