@@ -24,8 +24,11 @@ import { Logo, StatIcon, NavIcon, BellIcon } from "./icons.jsx";
 import { QuestCard } from "./components/QuestCard.jsx";
 import { AdminConsole } from "./components/AdminConsole.jsx";
 import { useSupabaseAuth } from "./auth/SupabaseAuthContext.jsx";
+import { supabase } from "./supabaseClient.js";
   function App() {
     let supabaseAuth = useSupabaseAuth(),
+      [connectingPayout, setConnectingPayout] = useState(false),
+      [connectPayoutError, setConnectPayoutError] = useState(""),
       [authScreen, setAuthScreen] = useState("landing"),
       [tab, setTab] = useState("boards"),
       [player, setPlayer] = useState(INITIAL_PLAYER),
@@ -1331,6 +1334,45 @@ import { useSupabaseAuth } from "./auth/SupabaseAuthContext.jsx";
                           />
                         </label>
                       </div>
+                      {supabaseAuth?.session && (
+                        <>
+                          <p className="fine">
+                            Real backend infrastructure (Stripe test mode — no
+                            payment methods attached yet): connect a payout
+                            account to see the onboarding flow end-to-end.
+                          </p>
+                          <button
+                            className="btn gold"
+                            disabled={connectingPayout}
+                            onClick={async () => {
+                              setConnectingPayout(true);
+                              setConnectPayoutError("");
+                              try {
+                                let { data, error } =
+                                  await supabase.functions.invoke(
+                                    "stripe-connect-onboarding",
+                                    { method: "POST" },
+                                  );
+                                if (error) throw error;
+                                if (data?.url) window.location.href = data.url;
+                              } catch (err) {
+                                setConnectPayoutError(
+                                  err.message || "Could not start onboarding.",
+                                );
+                              } finally {
+                                setConnectingPayout(false);
+                              }
+                            }}
+                          >
+                            {connectingPayout
+                              ? "Connecting…"
+                              : "Connect payout account (Stripe)"}
+                          </button>
+                          {connectPayoutError && (
+                            <p className="fine">{connectPayoutError}</p>
+                          )}
+                        </>
+                      )}
                       <h3 className="h3">Preferences</h3>
                       <div className="set-grid">
                         <label>

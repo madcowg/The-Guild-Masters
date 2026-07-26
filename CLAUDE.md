@@ -267,18 +267,33 @@ use this, ranked by dependency order — earlier tiers block later ones.
    deferred, needs a vendor choice + legal review first.
 
 **Tier 2 — Trust & economy infrastructure (before money or liability is real)**
-5. **Payments integration — PARTIALLY SCAFFOLDED.** Chose Stripe (Connect
-   Express, for marketplace-style payouts) — Square was the other real
-   option with a usable sandbox; Venmo has no viable public marketplace/
-   payout API, ruled out. Edge Functions exist
-   (`server/supabase/functions/stripe-connect-onboarding`,
+5. **Payments integration — SCAFFOLDED AND VERIFIED LIVE (Connect
+   onboarding).** Chose Stripe (Connect Express, for marketplace-style
+   payouts) — Square was the other real option with a usable sandbox;
+   Venmo has no viable public marketplace/payout API, ruled out. Edge
+   Functions exist (`server/supabase/functions/stripe-connect-onboarding`,
    `.../stripe-webhook`) for account onboarding and payment/account webhook
-   events, writing to `payment_accounts`/`transactions`. **Not yet done:**
-   no checkout/escrow flow ties an actual quest completion to a real
-   charge yet — that depends on the core game loop migrating off
-   `localStorage` first (see item 1). 1099 tax reporting not started.
-   Gig-economy labor classification already flagged elsewhere in this doc
-   as needing legal review before this ships for real.
+   events, writing to `payment_accounts`/`transactions`.
+   **Stripe account note:** the original test-mode Stripe account
+   (`acct_1TxEVtE2UOxc8cfV`) couldn't create Connect Express accounts —
+   Stripe requires a "sandbox" (its newer isolated test-environment
+   feature) before Connect is enabled, which required copying the account
+   via Dashboard → Sandboxes → Create → "Copy your account". Live sandbox
+   is `guild-masters-connect` (`acct_1TxIvl2R9Jk1FQiC`), configured as a
+   Marketplace business model. Its API keys + a webhook destination
+   (`guild-masters-stripe-webhook`, listening for `account.updated`,
+   `payment_intent.succeeded`, `payment_intent.payment_failed`) are set in
+   Supabase's `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` function secrets —
+   the old account's keys are no longer live. Verified end-to-end: the
+   in-app "Connect payout account (Stripe)" button successfully creates an
+   Express account and redirects into Stripe's hosted onboarding.
+   **Not yet done:** no checkout/escrow flow ties an actual quest
+   completion to a real charge yet — that depends on the core game loop
+   migrating off `localStorage` first (see item 1). 1099 tax reporting not
+   started. Gig-economy labor classification already flagged elsewhere in
+   this doc as needing legal review before this ships for real. No real
+   payment methods are attached to the sandbox account per explicit
+   instruction — infrastructure only, for future use.
 6. **Insurance partner integration** for the D+ "guild-covered insurance"
    promise — currently just UI copy with nothing behind it.
 7. **Server-side enforcement of steward permissions — SCAFFOLDED.** The
