@@ -286,7 +286,29 @@ use this, ranked by dependency order — earlier tiers block later ones.
    Supabase's `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` function secrets —
    the old account's keys are no longer live. Verified end-to-end: the
    in-app "Connect payout account (Stripe)" button successfully creates an
-   Express account and redirects into Stripe's hosted onboarding.
+   Express account and redirects into Stripe's hosted onboarding. Ran a
+   trial test-mode charge (test Visa token, destination charge with
+   `transfer_data.destination` set to the connected account) — PaymentIntent
+   succeeded, the connected account's balance received the transfer, and
+   the `stripe-webhook` function logged a clean 200 on `payment_intent.succeeded`.
+   **Known gap, fixed:** the `account.updated` webhook did not reliably
+   reflect onboarding completion in `payment_accounts.onboarding_status`.
+   Root cause: our webhook destination is scoped "Your account" in
+   Stripe's newer Accounts-v2 event model, but classic Express connected
+   accounts' `account.updated` events don't route there (nor does the
+   "Connected accounts" scope expose the classic event — only newer
+   v2-account event types). Rather than fight Stripe's event routing,
+   added `server/supabase/functions/stripe-connect-refresh-status`: the
+   frontend calls it once when Stripe redirects back with `?stripe=return`
+   (wired in `app/src/auth/SupabaseAuthContext.jsx`), and it actively
+   re-checks `charges_enabled`/`payouts_enabled` via `stripe.accounts.retrieve`
+   instead of waiting on a webhook that may never arrive for this account
+   type. This is the right pattern generally (webhooks can lag or be
+   missed) — don't remove it even if the webhook routing gets sorted out
+   later. Note: like the other two Edge Functions, this one deploys via
+   the Supabase Dashboard's browser editor, which doesn't bundle sibling
+   folders — its Supabase-admin/caller-profile helpers are inlined rather
+   than imported from `_shared`, unlike the local repo copy layout elsewhere.
    **Not yet done:** no checkout/escrow flow ties an actual quest
    completion to a real charge yet — that depends on the core game loop
    migrating off `localStorage` first (see item 1). 1099 tax reporting not

@@ -44,6 +44,24 @@ export function SupabaseAuthGate({ children }) {
     return () => sub.subscription.unsubscribe();
   }, []);
 
+  // Stripe redirects here with ?stripe=return after hosted Connect
+  // onboarding. Don't wait on the account.updated webhook to reflect
+  // completion — actively re-check status against Stripe right away (the
+  // webhook can lag or, for classic Express accounts, may not reach an
+  // account-scoped destination at all under newer Stripe API versions).
+  useEffect(() => {
+    if (!session) return;
+    let params = new URLSearchParams(window.location.search);
+    if (params.get("stripe") !== "return") return;
+    supabase.functions
+      .invoke("stripe-connect-refresh-status", { method: "POST" })
+      .finally(() => {
+        let url = new URL(window.location.href);
+        url.searchParams.delete("stripe");
+        window.history.replaceState({}, "", url);
+      });
+  }, [session]);
+
   if (!supabaseEnabled) return children;
   if (loading) return null;
 
