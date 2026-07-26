@@ -309,13 +309,68 @@ use this, ranked by dependency order — earlier tiers block later ones.
    the Supabase Dashboard's browser editor, which doesn't bundle sibling
    folders — its Supabase-admin/caller-profile helpers are inlined rather
    than imported from `_shared`, unlike the local repo copy layout elsewhere.
-   **Not yet done:** no checkout/escrow flow ties an actual quest
-   completion to a real charge yet — that depends on the core game loop
-   migrating off `localStorage` first (see item 1). 1099 tax reporting not
-   started. Gig-economy labor classification already flagged elsewhere in
-   this doc as needing legal review before this ships for real. No real
-   payment methods are attached to the sandbox account per explicit
-   instruction — infrastructure only, for future use.
+   **Quest payment lifecycle — BACKEND BUILT, NOT WIRED TO THE FRONTEND
+   YET.** Business rules (explicit user decision): quests are paid for in
+   advance of completion, unclaimed quests refund automatically after 7
+   days, and a 3% platform fee (covering operating costs and Stripe's own
+   processing fee) is added on top of the posted price rather than
+   deducted from the taker's payout — so a 90-scrip quest charges the
+   employer $92.70 and the taker still receives the full $90
+   (1 scrip = $1, another explicit decision). Chose authorize-then-capture
+   (a manual-capture PaymentIntent placed as a hold, not an immediate
+   charge) specifically because Stripe never refunds its own processing
+   fee — capturing immediately and refunding unclaimed quests would mean
+   eating that fee on every expired posting for no reason, whereas
+   canceling an uncaptured authorization costs nothing.
+   Mapped onto the *existing* single-player prototype's own state
+   machine rather than inventing new semantics: `pendingReview` → `open`
+   (steward/admin approval, `review_posting` RPC) is where the hold gets
+   placed; `sealPetition` (employer picks a taker) → `sealed` is where the
+   hold gets captured — this is the actual "paid in advance" moment, well
+   before work is verified done; `confirmAndRelease` (employer confirms
+   completion) → `done` is where the taker's cut (captured amount minus
+   the 3%) transfers to their connected account — this is deliberately
+   the *only* point money reaches the taker, so a dispute before then
+   still leaves room to refund the employer instead of paying out.
+   Four new Edge Functions, `server/supabase/functions/quest-review`
+   (wraps `review_posting`, authorizes payment on approval — cancels the
+   just-placed hold if the RPC then rejects the reviewer, so a bad
+   approval never leaves an orphaned hold on the employer's card),
+   `quest-seal` (captures on taker selection), `quest-complete`
+   (transfers on completion confirmation), and `quest-expire-sweep`
+   (daily cron sweep that cancels holds on postings open 7+ days with no
+   taker and marks them `expired` — a new posting status added alongside
+   `rejected`, since "nobody claimed it in time" and "a steward actively
+   declined it" are different things worth telling apart in the log).
+   Schema: migration `0006_quest_payments.sql` adds payment tracking
+   columns to `postings` (`payment_intent_id`, `payment_status`,
+   `employer_payment_method_id`, timestamps) and `platform_fee_cents` to
+   `transactions`. Migration `0007_quest_expire_cron.sql` schedules the
+   sweep via `pg_cron`/`pg_net`. The shared secret authorizing that cron
+   call lives *only* in Supabase Vault (generated in Postgres with
+   `gen_random_bytes`, never typed or seen as a literal value anywhere,
+   including this file) — the function verifies a presented token via a
+   `check_cron_secret()` SQL function rather than an env var, so there's
+   exactly one copy of the secret in existence. Verified end-to-end (SQL
+   editor triggering the same `net.http_post` the cron job runs, checked
+   against `net._http_response`): 200, `{"expired_count":0}`.
+   **Real gaps before this is reachable by an actual user:** (1) there is
+   still no employer-facing card collection UI anywhere in the app —
+   only the taker side (Connect payout onboarding) exists. `quest-review`
+   expects `postings.employer_payment_method_id` to already be set at
+   posting-creation time; for now that only has a value if something
+   supplies a raw Stripe payment method (a test token like `pm_card_visa`,
+   the same approach used for the trial charge in item 5 above) — a real
+   Stripe Elements/Payment Element flow in the "Post a Contract" UI is
+   still needed. (2) None of this is reachable from the running app at
+   all yet, since the quest/board game loop is still entirely
+   `localStorage`-based (see item 1) — the existing `sealPetition`/
+   `confirmAndRelease` functions in `App.jsx` don't call these Edge
+   Functions yet. (3) 1099 tax reporting not started. Gig-economy labor
+   classification already flagged elsewhere in this doc as needing legal
+   review before this ships for real. No real payment methods are
+   attached to the sandbox account per explicit instruction —
+   infrastructure only, for future use.
 6. **Insurance partner integration** for the D+ "guild-covered insurance"
    promise — currently just UI copy with nothing behind it.
 7. **Server-side enforcement of steward permissions — SCAFFOLDED.** The
