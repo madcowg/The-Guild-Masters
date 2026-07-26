@@ -3,13 +3,18 @@
 // quests, this transfers the taker's cut (the posted scrip amount,
 // excluding the platform's 3% fee, which was captured on top at seal
 // time) from the platform's Stripe balance into the taker's connected
-// account, and records the transaction.
+// account, and records the transaction. Also credits the taker's real
+// profile with xp/scrip/stat gains -- this is the sole authoritative
+// "quest done" event, so real rewards are granted here rather than via
+// a separate taker-side "mark complete" self-report.
 import Stripe from "npm:stripe@17";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY")!, {
   apiVersion: "2024-06-20",
 });
+
+const XP_PER_RANK: Record<string, number> = { F: 20, E: 35, D: 60, C: 100, B: 160, A: 250, S: 400 };
 
 function supabaseAdmin() {
   return createClient(
@@ -126,6 +131,33 @@ Deno.serve(async (req) => {
 
     void transfer;
   }
+
+  // Credit the real taker's own profile -- otherwise a "real" quest has no
+  // real consequence for the taker. Reuses postings.stats (the exact
+  // {STAT: points} object already computed at posting-creation time, no
+  // need to recompute) and applies for barter postings too (xp/stats still
+  // awarded, scrip stays 0). Deliberately does not replicate the mock's
+  // party-reward-splitting math -- no real party membership backs real
+  // postings yet, so the full reward goes to the one real taker.
+  const { data: takerProfile } = await admin
+    .from("profiles")
+    .select("xp, scrip, stats")
+    .eq("id", posting.taker_id)
+    .single();
+
+  const mergedStats: Record<string, number> = { ...(takerProfile?.stats ?? {}) };
+  for (const [k, v] of Object.entries(posting.stats ?? {})) {
+    mergedStats[k] = (mergedStats[k] ?? 0) + (v as number);
+  }
+
+  await admin
+    .from("profiles")
+    .update({
+      xp: (takerProfile?.xp ?? 0) + (XP_PER_RANK[posting.rank] ?? 0),
+      scrip: (takerProfile?.scrip ?? 0) + (posting.is_barter ? 0 : posting.scrip),
+      stats: mergedStats,
+    })
+    .eq("id", posting.taker_id);
 
   await admin
     .from("postings")

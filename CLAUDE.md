@@ -1,3 +1,16 @@
+# Claude Code Token Economy Rules
+
+## Command Constraints
+- DO NOT run broad repository searches (`grep`, `find`) if a specific file path can be inferred.
+- Rely on single-line execution combined with `&&` instead of spawning multiple separate bash tool calls.
+- Never view an entire file if you only need a specific section; use precise line-range tools or targeted viewing commands.
+
+## Output Constraints
+- Keep explanations brief and skip conversational filler, introductory remarks, and pleasantries.
+- Provide only the necessary context or direct answers to code queries.
+- Do not repeat or echo back code blocks that are already present in the workspace files.
+- If a terminal command fails, do not guess blindly with iterative trial-and-error commands; ask the user for clarification immediately.
+
 # The Guild Masters — Project Handoff
 
 Companion app to **The Tavern**, a physical space. Gamifies everyday tasks and

@@ -107,5 +107,18 @@ Deno.serve(async (req) => {
     .update({ taker_id, status: "sealed" })
     .eq("id", posting_id);
 
+  await admin
+    .from("posting_petitions")
+    .update({ status: "sealed", decided_at: new Date().toISOString() })
+    .eq("posting_id", posting_id)
+    .eq("petitioner_id", taker_id);
+
+  await admin
+    .from("posting_petitions")
+    .update({ status: "declined", decided_at: new Date().toISOString() })
+    .eq("posting_id", posting_id)
+    .eq("status", "pending")
+    .neq("petitioner_id", taker_id);
+
   return json({ ok: true });
 });

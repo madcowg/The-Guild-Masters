@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   RANKS,
   RANK_COLORS,
@@ -23,10 +23,25 @@ import {
 import { Logo, StatIcon, NavIcon, BellIcon } from "./icons.jsx";
 import { QuestCard } from "./components/QuestCard.jsx";
 import { AdminConsole } from "./components/AdminConsole.jsx";
+import { PostContractPaymentField } from "./components/PostContractPaymentField.jsx";
 import { useSupabaseAuth } from "./auth/SupabaseAuthContext.jsx";
 import { supabase } from "./supabaseClient.js";
   function App() {
     let supabaseAuth = useSupabaseAuth(),
+      // Real quests/petitions/disputes flow through the backend built this
+      // session whenever a real Supabase session exists; useSupabaseAuth()
+      // returns null unless the user is fully authenticated with a profiles
+      // row (SupabaseAuthGate renders its own landing/onboarding screens
+      // otherwise), so this single flag is sufficient -- no need to also
+      // check supabaseEnabled or .session here.
+      usingRealBackend = !!supabaseAuth,
+      cardFieldRef = useRef(null),
+      [realBoard, setRealBoard] = useState([]),
+      [realMyPostings, setRealMyPostings] = useState([]),
+      [realMyPetitions, setRealMyPetitions] = useState([]),
+      [realStewardQueue, setRealStewardQueue] = useState([]),
+      [realDisputes, setRealDisputes] = useState([]),
+      [realBackendError, setRealBackendError] = useState(""),
       [connectingPayout, setConnectingPayout] = useState(false),
       [connectPayoutError, setConnectPayoutError] = useState(""),
       [authScreen, setAuthScreen] = useState("landing"),
@@ -100,6 +115,64 @@ import { supabase } from "./supabaseClient.js";
             }
           })();
       }, [player, hasLoaded]));
+    let loadRealBoardData = async () => {
+        if (!usingRealBackend) return;
+        setRealBackendError("");
+        try {
+          let chapterId = supabaseAuth.profile.chapter_id,
+            myId = supabaseAuth.profile.id,
+            [
+              { data: board },
+              { data: mine },
+              { data: myPetitions },
+              { data: stewardQueue },
+              { data: disputes },
+            ] = await Promise.all([
+              supabase
+                .from("postings")
+                .select("*, employer:profiles!postings_employer_id_fkey(display_name,rank)")
+                .eq("chapter_id", chapterId)
+                .eq("status", "open")
+                .order("created_at", { ascending: false }),
+              supabase
+                .from("postings")
+                .select(
+                  "*, petitions:posting_petitions(*, petitioner:profiles!posting_petitions_petitioner_id_fkey(display_name,rank))",
+                )
+                .eq("employer_id", myId)
+                .order("created_at", { ascending: false }),
+              supabase
+                .from("posting_petitions")
+                .select(
+                  "*, posting:postings(*, employer:profiles!postings_employer_id_fkey(display_name,rank))",
+                )
+                .eq("petitioner_id", myId)
+                .order("created_at", { ascending: false }),
+              supabase
+                .from("postings")
+                .select("*, employer:profiles!postings_employer_id_fkey(display_name,rank)")
+                .eq("status", "pendingReview")
+                .order("created_at"),
+              supabase
+                .from("disputes")
+                .select(
+                  "*, posting:postings(title), raised_by_profile:profiles!disputes_raised_by_fkey(display_name), against_profile:profiles!disputes_against_fkey(display_name)",
+                )
+                .eq("status", "open")
+                .order("created_at"),
+            ]);
+          (setRealBoard(board ?? []),
+            setRealMyPostings(mine ?? []),
+            setRealMyPetitions(myPetitions ?? []),
+            setRealStewardQueue(stewardQueue ?? []),
+            setRealDisputes(disputes ?? []));
+        } catch (err) {
+          setRealBackendError(err.message || "Could not load the guild board.");
+        }
+      };
+    useEffect(() => {
+      loadRealBoardData();
+    }, [usingRealBackend, supabaseAuth?.profile?.chapter_id]);
     let showToast = (s) => {
         (setToast(s), setTimeout(() => setToast(null), 2600));
       },
@@ -126,6 +199,22 @@ import { supabase } from "./supabaseClient.js";
         isActingSteward &&
         RANKS.indexOf(s.rank) < 4 &&
         rankIndex > RANKS.indexOf(s.rank),
+      // Real-mode equivalents, sourced from the real profile rather than
+      // the mock player object. These only drive UI gating -- the actual
+      // security boundary is enforced server-side (review_posting RPC /
+      // quest-review Edge Function), which re-checks all of this itself.
+      realIsActingSteward =
+        usingRealBackend &&
+        (supabaseAuth.profile.is_admin ||
+          (supabaseAuth.profile.is_steward &&
+            RANKS.indexOf(supabaseAuth.profile.rank) >= 4)),
+      realCanStewardApprove = (s) =>
+        supabaseAuth.profile.is_admin ||
+        (supabaseAuth.profile.is_steward &&
+          RANKS.indexOf(supabaseAuth.profile.rank) >= 4 &&
+          RANKS.indexOf(s.rank) < 4 &&
+          RANKS.indexOf(supabaseAuth.profile.rank) > RANKS.indexOf(s.rank) &&
+          s.employer_id !== supabaseAuth.profile.id),
       addAchievements = (s) => {
         let freshlyEarned = s.filter((id) => !player.achievements.includes(id));
         setPlayer((S) => ({
@@ -149,7 +238,23 @@ import { supabase } from "./supabaseClient.js";
           ...S,
           saved: S.saved.filter((N) => N !== s.id),
         })),
+      petitionForQuestReal = async (posting) => {
+        if (posting.employer_id === supabaseAuth.profile.id) {
+          return showToast(
+            "You cannot take your own posting — but another adventurer soon will.",
+          );
+        }
+        let { error } = await supabase.from("posting_petitions").insert({
+          posting_id: posting.id,
+          petitioner_id: supabaseAuth.profile.id,
+        });
+        if (error) return showToast(error.message);
+        (setOpenQuest(null),
+          showToast("Petition sent — awaiting the employer's seal."),
+          loadRealBoardData());
+      },
       petitionForQuest = (s) => {
+        if (usingRealBackend) return petitionForQuestReal(s);
         if (s.mine)
           return showToast(
             "You cannot take your own posting \u2014 but another adventurer soon will.",
@@ -176,7 +281,12 @@ import { supabase } from "./supabaseClient.js";
           setOpenQuest(null),
           showToast("Petition sent \u2014 awaiting the employer's seal."));
       },
+      refreshBoardReal = async () => {
+        await loadRealBoardData();
+        showToast("The boards are refreshed.");
+      },
       refreshBoard = () => {
+        if (usingRealBackend) return refreshBoardReal();
         let recycled = (player.doneSinceRefresh || []).length,
           pending = player.myPostings.filter((s) => s.status === "pendingReview"),
           disputedPostings = player.myPostings.filter((s) => s.disputed),
@@ -257,7 +367,25 @@ import { supabase } from "./supabaseClient.js";
             ),
           ));
       },
+      reviewPostingReal = async (posting, approve) => {
+        let { data, error } = await supabase.functions.invoke("quest-review", {
+          method: "POST",
+          body: { posting_id: posting.id, approve },
+        });
+        if (error || data?.error) {
+          return showToast((data && data.error) || error.message);
+        }
+        (showToast(
+          approve
+            ? `"${posting.title}" approved and pinned to the board.`
+            : `"${posting.title}" was rejected.`,
+        ),
+          loadRealBoardData());
+      },
+      approveQueuedPostingReal = (s) => reviewPostingReal(s, true),
+      rejectQueuedPostingReal = (s) => reviewPostingReal(s, false),
       approveQueuedPosting = (s) => {
+        if (usingRealBackend) return approveQueuedPostingReal(s);
         (setPlayer((N) => ({
           ...N,
           stewardQueue: N.stewardQueue.map((U) =>
@@ -277,6 +405,7 @@ import { supabase } from "./supabaseClient.js";
           showToast(`"${s.title}" approved and pinned to the board.`));
       },
       rejectQueuedPosting = (s) => {
+        if (usingRealBackend) return rejectQueuedPostingReal(s);
         (setPlayer((N) => ({
           ...N,
           stewardQueue: N.stewardQueue.filter((U) => U.id !== s.id),
@@ -293,7 +422,51 @@ import { supabase } from "./supabaseClient.js";
         })),
           showToast(`"${s.title}" was rejected.`));
       },
+      submitPostingReal = async () => {
+        let statInfo = statRewardForRank(draftPosting.rank),
+          computedStats = {};
+        for (let i = 0; i < statInfo.pts; i++) {
+          let key = draftPosting.stats[i % draftPosting.stats.length];
+          computedStats[key] = (computedStats[key] || 0) + 1;
+        }
+
+        let employerPaymentMethodId = null;
+        if (!draftPosting.barter) {
+          if (!cardFieldRef.current) {
+            return showToast(
+              "Payment collection isn't set up yet — card details are required for a scrip contract.",
+            );
+          }
+          let { paymentMethodId, error: tokenizeError } = await cardFieldRef.current.tokenize();
+          if (tokenizeError) return showToast(tokenizeError);
+          employerPaymentMethodId = paymentMethodId;
+        }
+
+        let { error: insertError } = await supabase.from("postings").insert({
+          chapter_id: supabaseAuth.profile.chapter_id,
+          employer_id: supabaseAuth.profile.id,
+          rank: draftPosting.rank,
+          title: draftPosting.title.trim(),
+          description: draftPosting.desc.trim(),
+          type: draftPosting.type,
+          stats: computedStats,
+          scrip: draftPosting.barter ? 0 : Number(draftPosting.scrip) || 0,
+          is_barter: draftPosting.barter,
+          barter_for: draftPosting.barter ? draftPosting.barterFor.trim() : null,
+          tavern_only: RANKS.indexOf(draftPosting.rank) >= 4,
+          employer_payment_method_id: employerPaymentMethodId,
+        });
+        if (insertError) return showToast(insertError.message);
+
+        (setDraftPosting(null),
+          setBoardTab(draftPosting.barter ? "barter" : "jobs"),
+          showToast(
+            "Your contract is queued for the Steward's Ledger, pending guild review.",
+          ),
+          loadRealBoardData());
+      },
       submitPosting = () => {
+        if (usingRealBackend) return submitPostingReal();
         let s = statRewardForRank(draftPosting.rank),
           S = {};
         for (let U = 0; U < s.pts; U++) {
@@ -356,7 +529,50 @@ import { supabase } from "./supabaseClient.js";
             `The town crier calls your contract \u2014 ${N} petition${N > 1 ? "s" : ""} arrive${N > 1 ? "" : "s"}.`,
           ));
       },
+      sealPetitionReal = async (posting, petition) => {
+        let { data, error } = await supabase.functions.invoke("quest-seal", {
+          method: "POST",
+          body: { posting_id: posting.id, taker_id: petition.petitioner_id },
+        });
+        if (error || data?.error) {
+          return showToast((data && data.error) || error.message);
+        }
+        (showToast(
+          `You press your seal. ${petition.petitioner?.display_name ?? "The petitioner"} takes up the contract.`,
+        ),
+          loadRealBoardData());
+      },
+      declinePetitionReal = async (petition) => {
+        let { error } = await supabase
+          .from("posting_petitions")
+          .update({ status: "declined" })
+          .eq("id", petition.id);
+        if (error) return showToast(error.message);
+        (showToast(
+          `You decline ${petition.petitioner?.display_name ?? "the petitioner"}'s petition, with the guild's courtesy.`,
+        ),
+          loadRealBoardData());
+      },
+      confirmAndReleaseReal = async (posting, rating) => {
+        let { data, error } = await supabase.functions.invoke("quest-complete", {
+          method: "POST",
+          body: { posting_id: posting.id, rating },
+        });
+        if (error || data?.error) {
+          return showToast((data && data.error) || error.message);
+        }
+        if (rating <= 2) {
+          await supabase.rpc("raise_dispute", { p_posting_id: posting.id, p_rating: rating });
+        }
+        (showToast(
+          posting.is_barter
+            ? "Trade fulfilled. You and your taker part as friends of the guild."
+            : `Work confirmed. ${posting.scrip} scrip released to your taker.`,
+        ),
+          loadRealBoardData());
+      },
       sealPetition = (s, S) => {
+        if (usingRealBackend) return sealPetitionReal(s, S);
         (updateMyPosting(s.id, (N) => ({
           ...N,
           status: "sealed",
@@ -366,6 +582,7 @@ import { supabase } from "./supabaseClient.js";
           showToast(`You press your seal. ${S.name} takes up the contract.`));
       },
       declinePetition = (s, S) => {
+        if (usingRealBackend) return declinePetitionReal(S);
         (updateMyPosting(s.id, (N) => ({
           ...N,
           petitions: N.petitions.filter((U) => U.name !== S.name),
@@ -375,6 +592,7 @@ import { supabase } from "./supabaseClient.js";
           ));
       },
       confirmAndRelease = (s, S) => {
+        if (usingRealBackend) return confirmAndReleaseReal(s, S);
         (updateMyPosting(s.id, (N) => ({
           ...N,
           status: "done",
@@ -435,7 +653,30 @@ import { supabase } from "./supabaseClient.js";
           pushNotification("Your seal was pressed — a quest is now active."));
       },
       openRatingModal = (s) => setRatingTarget(s),
+      // Real quests don't have a taker-side "mark complete" self-report --
+      // quest-complete (triggered by the employer confirming) is the sole
+      // authoritative "done" event and already credited real xp/scrip/stats
+      // server-side. The taker's own action here is just rating the
+      // employer once the posting is already 'done'.
+      rateEmployerReal = async (posting, rating) => {
+        let { error } = await supabase.rpc("rate_employer", {
+          p_posting_id: posting.id,
+          p_rating: rating,
+        });
+        if (error) return showToast(error.message);
+        (setRatingTarget(null),
+          showToast("Rating recorded."),
+          loadRealBoardData());
+      },
+      resolveDisputeReal = async (dispute) => {
+        let { error } = await supabase.rpc("resolve_dispute", {
+          p_dispute_id: dispute.id,
+        });
+        if (error) return showToast(error.message);
+        (showToast(`Dispute on "${dispute.title}" resolved.`), loadRealBoardData());
+      },
       completeQuestAndRate = (s, S) => {
+        if (usingRealBackend) return rateEmployerReal(s, S);
         // Party quests were only reachable because the party bumped effective
         // rank by one (see petitionForQuest); the reward pool is split across
         // the party rather than paid out in full to each member, since there's
@@ -565,7 +806,22 @@ import { supabase } from "./supabaseClient.js";
           setAgeConfirmed(false),
           setNameInput(""));
       },
-      findQuestById = (s) => allQuests.find((S) => S.id === s);
+      findQuestById = (s) => allQuests.find((S) => S.id === s),
+      // Adapts a real postings row onto the mock quest shape's field names
+      // (desc/barter/barterFor/tavernOnly/mine/employer) so QuestCard and
+      // the quest-detail modal can render either one unchanged -- the
+      // original real fields (id, employer_id, is_barter, scrip, rank,
+      // stats...) stay spread onto the same object too, since the real
+      // mutator functions (sealPetitionReal, etc.) read those directly.
+      toCardShape = (posting) => ({
+        ...posting,
+        desc: posting.description,
+        barter: posting.is_barter,
+        barterFor: posting.barter_for,
+        tavernOnly: posting.tavern_only,
+        mine: posting.employer_id === supabaseAuth?.profile?.id,
+        employer: posting.employer?.display_name ?? "Unknown",
+      });
     return (
       <div className="gm-root">
         {toast && <div className="toast">{toast}</div>}
@@ -810,7 +1066,7 @@ import { supabase } from "./supabaseClient.js";
                           setDraftPosting({
                             title: "",
                             desc: "",
-                            rank: player.rank,
+                            rank: usingRealBackend ? supabaseAuth.profile.rank : player.rank,
                             type: "Labor",
                             barter: boardTab === "barter",
                             scrip: 50,
@@ -872,14 +1128,17 @@ import { supabase } from "./supabaseClient.js";
                     ))}
                   </div>
                   <div className="card-grid">
-                    {allQuests
-                      .filter((s) => s.status !== "pendingReview")
-                      .filter(
-                        (s) =>
-                          !(player.doneSinceRefresh || []).includes(s.id) &&
-                          !player.active.includes(s.id) &&
-                          !player.pending.includes(s.id),
-                      )
+                    {(usingRealBackend
+                      ? realBoard.map(toCardShape)
+                      : allQuests
+                          .filter((s) => s.status !== "pendingReview")
+                          .filter(
+                            (s) =>
+                              !(player.doneSinceRefresh || []).includes(s.id) &&
+                              !player.active.includes(s.id) &&
+                              !player.pending.includes(s.id),
+                          )
+                    )
                       .filter((s) =>
                         boardTab === "barter" ? s.barter : !s.barter,
                       )
@@ -893,16 +1152,180 @@ import { supabase } from "./supabaseClient.js";
                           i={S}
                           locked={
                             !s.mine &&
-                            RANKS.indexOf(s.rank) > effectiveRankIndex
+                            RANKS.indexOf(s.rank) >
+                              (usingRealBackend
+                                ? RANKS.indexOf(supabaseAuth.profile.rank)
+                                : effectiveRankIndex)
                           }
-                          saved={player.saved.includes(s.id)}
+                          saved={!usingRealBackend && player.saved.includes(s.id)}
                           onOpen={() => setOpenQuest(s)}
                         />
                       ))}
                   </div>
                 </section>
               )}
-              {tab === "quests" && (
+              {tab === "quests" && usingRealBackend && (
+                <section>
+                  <h2 className="h2">My Quests</h2>
+                  {realBackendError && <p className="warn">{realBackendError}</p>}
+                  {realMyPostings.length > 0 && (
+                    <div className="bucket">
+                      <h3 className="h3">
+                        The Employer's Desk — your postings
+                      </h3>
+                      {realMyPostings.map((s) => {
+                        let pendingPetitions = (s.petitions || []).filter(
+                          (p) => p.status === "pending",
+                        );
+                        return (
+                          <div key={s.id} className="panel desk">
+                            <div className="desk-head">
+                              <span
+                                className="qr-rank"
+                                style={{ background: RANK_COLORS[s.rank] }}
+                              >
+                                {s.rank}
+                              </span>
+                              <div className="qr-main">
+                                <div className="qr-title">{s.title}</div>
+                                <div className="qr-sub">
+                                  {s.is_barter
+                                    ? `Barter: ${s.barter_for}`
+                                    : `${s.scrip} scrip in escrow`}{" "}
+                                  ·{" "}
+                                  {s.status === "pendingReview"
+                                    ? "Awaiting guild review — not yet visible on the board"
+                                    : s.status === "open"
+                                      ? pendingPetitions.length
+                                        ? `${pendingPetitions.length} petition${pendingPetitions.length > 1 ? "s" : ""} await your seal`
+                                        : "Open — awaiting petitions"
+                                      : s.status === "sealed"
+                                        ? "Sealed — at work"
+                                        : s.status === "done"
+                                          ? `Fulfilled \xB7 You rated ${"★".repeat(s.my_rating || 0)}${s.disputed ? " \xB7 Disputed" : ""}`
+                                          : s.status === "expired"
+                                            ? "Expired — no taker within 7 days, refunded"
+                                            : "Rejected"}
+                                </div>
+                              </div>
+                            </div>
+                            {s.status === "open" &&
+                              pendingPetitions.map((p) => (
+                                <div key={p.id} className="petition">
+                                  <span
+                                    className="qr-rank"
+                                    style={{
+                                      background: RANK_COLORS[p.petitioner?.rank],
+                                    }}
+                                  >
+                                    {p.petitioner?.rank}
+                                  </span>
+                                  <div className="qr-main">
+                                    <div className="qr-title">
+                                      {p.petitioner?.display_name ?? "Unknown"}
+                                    </div>
+                                  </div>
+                                  <div className="pet-actions">
+                                    <button
+                                      className="btn tiny gold"
+                                      onClick={() => sealPetition(s, p)}
+                                    >
+                                      Press seal
+                                    </button>
+                                    <button
+                                      className="btn tiny ghost"
+                                      onClick={() => declinePetition(s, p)}
+                                    >
+                                      Decline
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            {s.status === "sealed" && (
+                              <div className="petition confirm-row">
+                                <div className="qr-main">
+                                  <div className="qr-sub">
+                                    When your taker delivers the deed, confirm
+                                    & rate to release{" "}
+                                    {s.is_barter ? "your trade" : "the scrip"}:
+                                  </div>
+                                </div>
+                                <div className="mini-stars">
+                                  {[1, 2, 3, 4, 5].map((S) => (
+                                    <button
+                                      key={S}
+                                      className="mini-star"
+                                      title={`${S} star${S > 1 ? "s" : ""}`}
+                                      onClick={() => confirmAndRelease(s, S)}
+                                    >
+                                      ★
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className="bucket">
+                    <h3 className="h3">Your petitions</h3>
+                    {realMyPetitions.length === 0 && (
+                      <p className="empty">
+                        Nothing here yet. The board awaits.
+                      </p>
+                    )}
+                    {realMyPetitions.map((p) => {
+                      let posting = p.posting || {};
+                      return (
+                        <div key={p.id} className="quest-row">
+                          <span
+                            className="qr-rank"
+                            style={{ background: RANK_COLORS[posting.rank] }}
+                          >
+                            {posting.rank}
+                          </span>
+                          <div className="qr-main">
+                            <div className="qr-title">{posting.title}</div>
+                            <div className="qr-sub">
+                              {posting.is_barter
+                                ? `Barter: ${posting.barter_for}`
+                                : `${posting.scrip} scrip`}
+                              {" \xB7 "}
+                              {p.status === "declined"
+                                ? "Declined"
+                                : posting.status === "open"
+                                  ? "Awaiting employer's seal"
+                                  : posting.status === "sealed"
+                                    ? "Sealed to you — at work"
+                                    : posting.status === "done"
+                                      ? posting.taker_rating
+                                        ? `Rated \xB7 You rated the employer ${"★".repeat(posting.taker_rating)}`
+                                        : "Awaiting your rating"
+                                      : posting.status}
+                            </div>
+                          </div>
+                          {posting.status === "done" && !posting.taker_rating && (
+                            <button
+                              className="btn tiny gold"
+                              onClick={() =>
+                                openRatingModal({
+                                  ...posting,
+                                  employer: posting.employer?.display_name ?? "your employer",
+                                })
+                              }
+                            >
+                              Rate employer
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+              {tab === "quests" && !usingRealBackend && (
                 <section>
                   <h2 className="h2">My Quests</h2>
                   {(player.myPostings || []).length > 0 && (
@@ -1708,7 +2131,122 @@ import { supabase } from "./supabaseClient.js";
               {tab === "hall" && (
                 <section>
                   <h2 className="h2">The Guildhall</h2>
-                  {isActingSteward && (
+                  {usingRealBackend && (
+                    <React.Fragment>
+                      {realIsActingSteward && (
+                        <div className="bucket steward-ledger">
+                          <h3 className="h3">Steward's Ledger</h3>
+                          <p className="qr-sub">
+                            Visible only to stewards (Rank {RANKS[4]}+) and
+                            the Guild Council. A steward may never review
+                            their own postings, and may only approve
+                            requests strictly below their own rank. Rank{" "}
+                            {RANKS[4]}/{RANKS[5]}/{RANKS[6]} requests always
+                            need the Guild Council instead of a ranked guild
+                            member.
+                          </p>
+                          <h4 className="h4">
+                            Other guild members' postings —{" "}
+                            {realStewardQueue.filter((s) => s.employer_id !== supabaseAuth.profile.id).length}
+                          </h4>
+                          {realStewardQueue.filter((s) => s.employer_id !== supabaseAuth.profile.id).length === 0 && (
+                            <p className="empty">Nothing awaiting review.</p>
+                          )}
+                          {realStewardQueue
+                            .filter((s) => s.employer_id !== supabaseAuth.profile.id)
+                            .map((s) => (
+                              <div key={s.id} className="quest-row">
+                                <span
+                                  className="qr-rank"
+                                  style={{ background: RANK_COLORS[s.rank] }}
+                                >
+                                  {s.rank}
+                                </span>
+                                <div className="qr-main">
+                                  <div className="qr-title">{s.title}</div>
+                                  <div className="qr-sub">
+                                    {s.employer?.display_name ?? "Unknown"} ·{" "}
+                                    {s.is_barter ? `Barter: ${s.barter_for}` : `${s.scrip} scrip`}
+                                  </div>
+                                </div>
+                                {realCanStewardApprove(s) ? (
+                                  <div className="pet-actions">
+                                    <button
+                                      className="btn tiny gold"
+                                      onClick={() => approveQueuedPosting(s)}
+                                    >
+                                      Approve
+                                    </button>
+                                    <button
+                                      className="btn tiny ghost"
+                                      onClick={() => rejectQueuedPosting(s)}
+                                    >
+                                      Reject
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="qr-sub">
+                                    {RANKS.indexOf(s.rank) >= 4
+                                      ? "Requires Guild Council approval"
+                                      : "Requires a higher-ranked steward"}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                      {realStewardQueue.filter((s) => s.employer_id === supabaseAuth.profile.id).length > 0 && (
+                        <div className="bucket">
+                          <h4 className="h4">Your postings awaiting Council review</h4>
+                          {realStewardQueue
+                            .filter((s) => s.employer_id === supabaseAuth.profile.id)
+                            .map((s) => (
+                              <div key={s.id} className="quest-row">
+                                <span
+                                  className="qr-rank"
+                                  style={{ background: RANK_COLORS[s.rank] }}
+                                >
+                                  {s.rank}
+                                </span>
+                                <div className="qr-main">
+                                  <div className="qr-title">{s.title}</div>
+                                  <div className="qr-sub">
+                                    {s.is_barter ? `Barter: ${s.barter_for}` : `${s.scrip} scrip`}
+                                  </div>
+                                </div>
+                                <div className="qr-sub">Awaiting the Council</div>
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                      {realDisputes.length > 0 && (
+                        <div className="bucket">
+                          <h4 className="h4">Open disputes — {realDisputes.length}</h4>
+                          {realDisputes.map((d) => (
+                            <div key={d.id} className="quest-row">
+                              <div className="qr-main">
+                                <div className="qr-title">{d.posting?.title}</div>
+                                <div className="qr-sub">
+                                  {d.raised_by_profile?.display_name ?? "Someone"} rated{" "}
+                                  {d.against_profile?.display_name ?? "someone"}{" "}
+                                  {"★".repeat(d.rating)}
+                                </div>
+                              </div>
+                              {realIsActingSteward && (
+                                <button
+                                  className="btn tiny gold"
+                                  onClick={() => resolveDisputeReal(d)}
+                                >
+                                  Resolve
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </React.Fragment>
+                  )}
+                  {!usingRealBackend && isActingSteward && (
                     <div className="bucket steward-ledger">
                       <h3 className="h3">Steward's Ledger</h3>
                       <p className="qr-sub">
@@ -2048,7 +2586,7 @@ import { supabase } from "./supabaseClient.js";
                   </button>
                 ) : (
                   <React.Fragment>
-                    {!player.saved.includes(openQuest.id) && (
+                    {!usingRealBackend && !player.saved.includes(openQuest.id) && (
                       <button
                         className="btn ghost"
                         onClick={() => {
@@ -2257,6 +2795,9 @@ import { supabase } from "./supabaseClient.js";
                     })
                   }
                 />
+              )}
+              {usingRealBackend && !draftPosting.barter && (
+                <PostContractPaymentField ref={cardFieldRef} />
               )}
               {RANKS.indexOf(draftPosting.rank) >= 4 && (
                 <div
