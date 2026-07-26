@@ -26,6 +26,7 @@ import { AdminConsole } from "./components/AdminConsole.jsx";
 import { PostContractPaymentField } from "./components/PostContractPaymentField.jsx";
 import { useSupabaseAuth } from "./auth/SupabaseAuthContext.jsx";
 import { supabase } from "./supabaseClient.js";
+import { generateNickname } from "./nickname.js";
   function App() {
     let supabaseAuth = useSupabaseAuth(),
       // Real quests/petitions/disputes flow through the backend built this
@@ -238,6 +239,19 @@ import { supabase } from "./supabaseClient.js";
           ...S,
           saved: S.saved.filter((N) => N !== s.id),
         })),
+      rerollNicknameReal = async () => {
+        let name = generateNickname(),
+          { error } = await supabase
+            .from("profiles")
+            .update({ display_name: name })
+            .eq("id", supabaseAuth.profile.id);
+        if (error) return showToast(error.message);
+        (await supabaseAuth.refreshProfile(), showToast(`Your name is now ${name}.`));
+      },
+      rerollNickname = () => {
+        if (usingRealBackend) return rerollNicknameReal();
+        setPlayer((S) => ({ ...S, name: generateNickname() }));
+      },
       petitionForQuestReal = async (posting) => {
         if (posting.employer_id === supabaseAuth.profile.id) {
           return showToast(
@@ -988,7 +1002,9 @@ import { supabase } from "./supabaseClient.js";
                   <span className="crest small">✦</span>
                 )}
                 <span className="tb-id">
-                  <span className="tb-name">{player.name}</span>
+                  <span className="tb-name">
+                    {usingRealBackend ? supabaseAuth.profile.display_name : player.name}
+                  </span>
                   <span className="tb-sub">
                     Rank{" "}
                     <b
@@ -1661,16 +1677,32 @@ import { supabase } from "./supabaseClient.js";
                       <div className="set-grid">
                         <label>
                           Adventurer name
-                          <input
-                            className="field"
-                            value={player.name}
-                            onChange={(s) =>
-                              setPlayer((S) => ({
-                                ...S,
-                                name: s.target.value,
-                              }))
-                            }
-                          />
+                          <div style={{ display: "flex", gap: "8px" }}>
+                            <input
+                              className="field"
+                              value={
+                                usingRealBackend
+                                  ? supabaseAuth.profile.display_name
+                                  : player.name
+                              }
+                              readOnly={usingRealBackend}
+                              onChange={(s) =>
+                                !usingRealBackend &&
+                                setPlayer((S) => ({
+                                  ...S,
+                                  name: s.target.value,
+                                }))
+                              }
+                            />
+                            <button
+                              type="button"
+                              className="btn tiny"
+                              onClick={rerollNickname}
+                              title="Get a new adventurer nickname"
+                            >
+                              🎲 Reroll
+                            </button>
+                          </div>
                         </label>
                         <label>
                           Email
