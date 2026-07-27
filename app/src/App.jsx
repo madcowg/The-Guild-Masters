@@ -162,9 +162,28 @@ import { generateNickname } from "./nickname.js";
                 .eq("status", "open")
                 .order("created_at"),
             ]);
-          (setRealBoard(board ?? []),
-            setRealMyPostings(mine ?? []),
-            setRealMyPetitions(myPetitions ?? []),
+          // Overlays flavor_title/flavor_description over title/description
+          // for display only -- title/description on the DB row are never
+          // touched, remain the authoritative contract everywhere
+          // server-side. Applied only where a casual/browsing view would
+          // show it (open board, employer's own postings, taker's own
+          // petitions) -- never to stewardQueue or disputes, which must
+          // always show the real, unflavored text for judgment.
+          let overlayFlavor = (p) => ({
+            ...p,
+            original_title: p.title,
+            original_description: p.description,
+            title: p.flavor_title || p.title,
+            description: p.flavor_description || p.description,
+          });
+          (setRealBoard((board ?? []).map(overlayFlavor)),
+            setRealMyPostings((mine ?? []).map(overlayFlavor)),
+            setRealMyPetitions(
+              (myPetitions ?? []).map((pet) => ({
+                ...pet,
+                posting: pet.posting && overlayFlavor(pet.posting),
+              })),
+            ),
             setRealStewardQueue(stewardQueue ?? []),
             setRealDisputes(disputes ?? []));
         } catch (err) {

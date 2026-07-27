@@ -1,0 +1,11 @@
+{
+  "name": "quest-flavor-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local worker: polls The Guild Masters' Supabase project for postings needing flavor text, rewrites them via local Ollama (llama3.1) with an Anthropic cloud fallback, and writes results back.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  }
+}
