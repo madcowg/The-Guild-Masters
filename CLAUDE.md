@@ -229,25 +229,34 @@ North-star metric: **quests completed per active member per month.**
    it's a divided pool rather than per-member payout (no persisted account
    for NPC roster members).
 
-## Beta → launch technical requirements (ranked, 2026-07-25)
+## Beta → launch technical requirements (ranked, last refreshed 2026-07-27)
 
 Everything in "Done since the original handoff" was the old roadmap and is
 done. This list is what's actually left before real (non-prototype) users can
 use this, ranked by dependency order — earlier tiers block later ones.
 
 **Tier 1 — Blocking foundation (nothing else works for real users without these)**
-1. **Real backend + multi-user database — SCAFFOLDED, needs manual setup.**
-   Schema (`server/supabase/migrations/`) covers profiles, chapters, venues
-   + venue_history, postings, disputes, steward_log, id_verifications,
-   payment_accounts, transactions, with RLS + SECURITY DEFINER RPCs
-   enforcing the same governance rules as the client (no self-review, rank
-   ceiling, admin-only venue changes). **Not yet done:** the existing
-   quest/board/party gameplay in `App.jsx` still runs entirely on
-   `localStorage` — only the Admin Console (venues, roles, ID verification)
-   actually reads/writes Supabase so far. Migrating the core game loop is
-   its own follow-on task. See `server/README.md` for setup (create the
-   Supabase project, run the migrations — none of this happens
-   automatically, a human has to do it).
+1. **Real backend + multi-user database — DONE (core game loop migrated
+   2026-07-26).** Schema (`server/supabase/migrations/`) covers profiles,
+   chapters, venues + venue_history, postings, posting_petitions, disputes,
+   steward_log, id_verifications, payment_accounts, transactions, with RLS +
+   SECURITY DEFINER RPCs enforcing the same governance rules as the client
+   (no self-review, rank ceiling, admin-only venue changes). The quest
+   board/petition/dispute loop in `App.jsx` now branches on
+   `usingRealBackend = !!supabaseAuth` and calls the real Edge
+   Functions/RPCs (`quest-review`, `quest-seal`, `quest-complete`,
+   `posting_petitions` inserts, `raise_dispute`/`rate_employer` RPCs) instead
+   of `localStorage` mutations, while the original localStorage-only mock
+   prototype still runs completely untouched whenever Supabase env vars are
+   unset — verified live end-to-end, including a synthetic second identity
+   driven via a scripted JWT to exercise rank-ceiling/no-self-review
+   rejection and RLS from a genuinely distinct `auth.uid()`. Out of scope for
+   this migration, intentionally still mock: Party/Fellowship (NPC roster),
+   rank trials, Tavern check-in, reward-splitting-across-a-party math,
+   forum/DMs — see item 8 below for Tavern specifically. See
+   `server/README.md` for backend setup (create the Supabase project, run
+   the migrations — none of this happens automatically, a human has to do
+   it).
 2. **Admin console / control panel — BUILT** (`app/src/components/AdminConsole.jsx`,
    reachable from Settings → "Open Admin Console" when `profiles.is_admin`
    is true — a rank-independent flag, only ever changed via `admin_set_role`).
@@ -367,26 +376,36 @@ use this, ranked by dependency order — earlier tiers block later ones.
    exactly one copy of the secret in existence. Verified end-to-end (SQL
    editor triggering the same `net.http_post` the cron job runs, checked
    against `net._http_response`): 200, `{"expired_count":0}`.
-   **Real gaps before this is reachable by an actual user:** (1) there is
-   still no employer-facing card collection UI anywhere in the app —
-   only the taker side (Connect payout onboarding) exists. `quest-review`
-   expects `postings.employer_payment_method_id` to already be set at
-   posting-creation time; for now that only has a value if something
-   supplies a raw Stripe payment method (a test token like `pm_card_visa`,
-   the same approach used for the trial charge in item 5 above) — a real
-   Stripe Elements/Payment Element flow in the "Post a Contract" UI is
-   still needed. (2) None of this is reachable from the running app at
-   all yet, since the quest/board game loop is still entirely
-   `localStorage`-based (see item 1) — the existing `sealPetition`/
-   `confirmAndRelease` functions in `App.jsx` don't call these Edge
-   Functions yet. (3) 1099 tax reporting not started. Gig-economy labor
-   classification already flagged elsewhere in this doc as needing legal
-   review before this ships for real. No real payment methods are
-   attached to the sandbox account per explicit instruction —
-   infrastructure only, for future use.
+   **Employer-facing card collection — DONE (2026-07-26).**
+   `app/src/components/PostContractPaymentField.jsx` (Stripe Elements
+   `CardElement` + `stripe.createPaymentMethod()`, chosen over
+   `PaymentElement` since no PaymentIntent exists yet at posting-creation
+   time) renders in the "Post a Contract" modal whenever
+   `usingRealBackend && !draftPosting.barter`, sets
+   `postings.employer_payment_method_id` on insert, and the real
+   `submitPostingReal`/`sealPetitionReal`/`confirmAndReleaseReal` mutators
+   in `App.jsx` now call `quest-review`/`quest-seal`/`quest-complete`
+   directly — this is fully reachable from the running app for real users,
+   not just infrastructure. Verified live: real card tokenized → posting
+   authorized → captured on seal → transferred on completion, using a
+   synthetic second identity for the taker side (its own Stripe Connect
+   payout account, onboarded via the real hosted flow) to get a genuinely
+   distinct counterparty.
+   **Still open:** (1) 1099 tax reporting not started — gig-economy labor
+   classification still needs real legal review before this ships for real
+   money, per the flag elsewhere in this doc. (2) The final
+   `quest-complete` payout transfer has not been verified with real
+   captured-then-transferred funds live end-to-end — Stripe's test-mode
+   sandbox only makes captured funds "available" (vs. pending) unreliably
+   even with the documented instant-availability test card, so this
+   specific leg is deliberately deferred until right before real users
+   onboard, not before (explicit decision, 2026-07-26) — do the full
+   live-money verification pass then, not earlier. (3) No real payment
+   methods are attached to the sandbox account per explicit instruction —
+   infrastructure only, until that same near-launch point.
 6. **Insurance partner integration** for the D+ "guild-covered insurance"
    promise — currently just UI copy with nothing behind it.
-7. **Server-side enforcement of steward permissions — SCAFFOLDED.** The
+7. **Server-side enforcement of steward permissions — DONE.** The
    `review_posting`/`resolve_dispute` Postgres RPCs (`0002_functions_rls.sql`)
    re-implement the same rank-ceiling + no-self-review rules as
    `canStewardApprove` in `App.jsx`, enforced server-side via SECURITY
@@ -394,10 +413,13 @@ use this, ranked by dependency order — earlier tiers block later ones.
    One correction worth noting: real disputes involve two distinct users,
    so a steward can genuinely recuse only when they're a party to that
    specific dispute (`raised_by`/`against`), rather than every dispute
-   always being Council-only as in the single-player prototype. **Not yet
-   done:** the existing `App.jsx` game loop doesn't call these RPCs yet —
-   it still uses its own local `canStewardApprove`/`refreshBoard` logic
-   against `localStorage` data (see item 1).
+   always being Council-only as in the single-player prototype. The real
+   `App.jsx` game loop now calls these RPCs (`realCanStewardApprove`,
+   `quest-review` invocation) for `usingRealBackend` sessions — verified
+   live with a synthetic second identity: rejected when unqualified,
+   accepted once promoted to a qualifying steward rank, distinct from the
+   single real admin account's own (pre-existing, unchanged)
+   self-approval bypass via `is_admin`.
 
 **Tier 3 — Engagement & the Tavern partner network**
 8. **Multi-venue partner network for "The Tavern" — BACKEND BUILT, not yet
@@ -415,16 +437,50 @@ use this, ranked by dependency order — earlier tiers block later ones.
    door's conversion rate to per-chapter (currently = one door) conversion.
 9. **Push notifications** (web push / FCM / APNs) replacing the in-app-only
    inbox — flagged as the strongest re-engagement hook.
-10. **Real ratings/reviews** replacing simulated NPC petitioners, once real
-    other users exist to rate.
+10. **Real ratings/reviews — DONE for real-backend sessions.** `posting_petitions`
+    (migration 0008) replaces simulated NPC petitioners with real petitions
+    from real users; `raise_dispute`/`rate_employer` RPCs (migration 0009)
+    make dispute-raising and the taker's rating of the employer real,
+    persisted actions instead of side effects baked into mock state. The
+    mock/local prototype's simulated NPC petitioners are untouched and
+    still used whenever no real backend session exists.
+11. **Quest "spruce up" (LLM flavor text) — DONE (2026-07-26), not in the
+    original design doc.** Postings get a cosmetic title/description
+    rewrite (theme/fun only, never touching scope/stats/success-criteria)
+    via a local Node worker (`local-agents/quest-flavor-worker/`) polling
+    two new Edge Functions (`quest-flavor-queue`/`quest-flavor-apply`,
+    migration `0010_quest_flavor.sql`), calling a locally-hosted Ollama
+    instance (`llama3.1`) first with an Anthropic Messages API fallback if
+    Ollama is unreachable (fallback wired but blocked on the account's
+    Anthropic billing credits as of this writing — revisit once credits
+    reset). Original `title`/`description` stay authoritative everywhere
+    server-side; flavor text is a display-only overlay, never shown to
+    stewards/disputes reviewing a posting. See the global
+    `~/.claude/CLAUDE.md` "Local LLM Delegation" section for the reusable
+    local-model infrastructure this rides on (also now hosts `qwen2.5`,
+    `deepseek-r1`, and a Gemini/OpenAI visual-asset-generation helper for
+    future image-needing features — gated off by explicit credit flags
+    until real billing exists on those accounts too).
+12. **Avatar nickname reroll — DONE (2026-07-26), not in the original
+    design doc.** Static curated word-list generator (`app/src/nickname.js`,
+    no LLM/network call), a "Reroll" button in the Character Sheet writes
+    `profiles.display_name` for real backend users; mirrored into the mock
+    player object for parity in the standalone demo build.
 
 **Tier 4 — Quality/ops**
-11. Automated tests for existing flows (moderation, party split,
+13. Automated tests for existing flows (moderation, party split,
     notifications) — none exist today.
-12. Real CI/CD pipeline — deploy is currently manual (`npm run build` →
+14. Real CI/CD pipeline — deploy is currently manual (`npm run build` →
     copy `dist/index.html` → commit).
 
 **Tier 5 — Rollout gates (product decisions, not engineering tasks)**
-13. Private alpha — F/E ranks only, ~50–100 members, one city (cold-start
+15. Private alpha — F/E ranks only, ~50–100 members, one city (cold-start
     liquidity test, see "Product roadmap" above).
-14. Multi-city chapters — only after one city's unit economics prove out.
+16. Multi-city chapters — only after one city's unit economics prove out.
+
+**Deferred by explicit user decision (2026-07-26/27), not forgotten:**
+- Full bug/security/vulnerability audit — queued after the main feature set,
+  do not start without the user re-raising it. Not delegable to local LLMs
+  even then (security-sensitive cross-cutting judgment call).
+- Live Stripe payout end-to-end test with real captured/transferred funds —
+  deliberately held until right before real users onboard, not before.
