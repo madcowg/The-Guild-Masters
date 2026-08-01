@@ -67,7 +67,7 @@ export function SupabaseAuthGate({ children }) {
 
   if (!session) {
     return (
-      <div className="gate">
+      <div className="gate gm-root">
         <div className="gate-card">
           <div className="crest">✦</div>
           <h1 className="brand">The Guild Masters</h1>
@@ -119,7 +119,7 @@ export function SupabaseAuthGate({ children }) {
     };
 
     return (
-      <div className="gate">
+      <div className="gate gm-root">
         <div className="gate-card">
           <div className="crest">✦</div>
           <h1 className="brand">The Guild Masters</h1>

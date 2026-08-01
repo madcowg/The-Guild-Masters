@@ -8,6 +8,10 @@ import { viteSingleFile } from "vite-plugin-singlefile";
 // from bundling App.jsx via an absolute path outside this project).
 export default defineConfig({
   plugins: [react(), viteSingleFile()],
+  server: {
+    port: 5199,
+    strictPort: true,
+  },
   build: {
     outDir: "dist",
     assetsInlineLimit: 100000000,
