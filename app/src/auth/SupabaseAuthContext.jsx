@@ -77,7 +77,12 @@ export function SupabaseAuthGate({ children }) {
           </p>
           <button
             className="btn gold"
-            onClick={() => supabase.auth.signInWithOAuth({ provider: "google" })}
+            onClick={() =>
+              supabase.auth.signInWithOAuth({
+                provider: "google",
+                options: { redirectTo: window.location.origin + window.location.pathname },
+              })
+            }
           >
             Continue with Google
           </button>
